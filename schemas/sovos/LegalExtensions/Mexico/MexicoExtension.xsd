@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- edited with XMLSpy v2020 rel. 2 (x64) (http://www.altova.com) by Emanuel Castro (SOVOS) -->
+<!-- Mexico Extension v1 11/02/2020		Note: Added Complementos for Retenciones document -->
+<xsd:schema xmlns:mex="http://www.sovos.com/namespaces/sovosExtensions/Mexico" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:n1="http://www.sovos.com/namespaces/sovosExtensions/Mexico" targetNamespace="http://www.sovos.com/namespaces/sovosExtensions/Mexico" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xsd:element name="Mexico" type="n1:MexicoExtensionType">
+		<xsd:annotation>
+			<xsd:documentation>Version: 1.5</xsd:documentation>
+			<xsd:documentation>Mexico custom fields.</xsd:documentation>
+			<xsd:documentation>Changelog: Modification of targetnamespace and its dependencies.</xsd:documentation>
+		</xsd:annotation>
+	</xsd:element>
+	<xsd:complexType name="MexicoExtensionType">
+		<xsd:sequence>
+			<xsd:element name="Legal" type="n1:LegalType" minOccurs="0"/>
+			<xsd:element name="LegalAddon" type="n1:LegalAddonType" minOccurs="0" maxOccurs="unbounded"/>
+			<xsd:element name="CustomerData" type="n1:CustomerDataType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="LegalType">
+		<xsd:sequence>
+			<xsd:any minOccurs="0"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="LegalAddonType">
+		<xsd:sequence>
+			<xsd:any processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="CustomerDataType">
+		<xsd:annotation>
+			<xsd:documentation>Here you can add any XML structure that you are using for this purpose. The only condition is to include also de Schema that supports your structure, this will allow you to have a valid file.</xsd:documentation>
+		</xsd:annotation>
+		<xsd:sequence>
+			<xsd:any processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="PrintedDataType">
+		<xsd:annotation>
+			<xsd:documentation>Here you can add any XML structure that you are using for this purpose. The only condition is to include also de Schema that supports your structure, this will allow you to have a valid file.</xsd:documentation>
+		</xsd:annotation>
+		<xsd:sequence>
+			<xsd:any minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+</xsd:schema>
