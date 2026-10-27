@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xsd:schema xmlns:sci="http://www.sovos.com/namespaces/sovosCanonicalInvoice" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:inv="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:crn="urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2" xmlns:dea="urn:oasis:names:specification:ubl:schema:xsd:DespatchAdvice-2" xmlns:dbn="urn:oasis:names:specification:ubl:schema:xsd:DebitNote-2" targetNamespace="http://www.sovos.com/namespaces/sovosCanonicalInvoice" elementFormDefault="unqualified" attributeFormDefault="unqualified">
+	<xsd:import namespace="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" schemaLocation="./maindoc/UBL-Invoice-2.1.xsd"/>
+	<xsd:import namespace="urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2" schemaLocation="./maindoc/UBL-CreditNote-2.1.xsd"/>
+	<xsd:import namespace="urn:oasis:names:specification:ubl:schema:xsd:DebitNote-2" schemaLocation="./maindoc/UBL-DebitNote-2.1.xsd"/>
+	<xsd:import namespace="urn:oasis:names:specification:ubl:schema:xsd:DespatchAdvice-2" schemaLocation="./maindoc/UBL-DespatchAdvice-2.1.xsd"/>
+	<xsd:import namespace="http://www.sovos.com/namespaces/additionalData" schemaLocation="AdditionalData.xsd"/>
+	<xsd:element name="SovosCanonicalInvoice" type="sci:SovosCanonicalInvoiceType">
+		<xsd:annotation>
+			<xsd:documentation>Version: 4.1</xsd:documentation>
+			<xsd:documentation>Sovos Canonical Invoice block.</xsd:documentation>
+			<xsd:documentation>Changelog: Remotion of xmlns:fin of the root node.</xsd:documentation>
+		</xsd:annotation>
+	</xsd:element>
+	<!--MAIN COMPLEX TYPE-->
+	<xsd:complexType name="SovosCanonicalInvoiceType">
+		<xsd:sequence>
+			<xsd:choice>
+				<xsd:element ref="inv:Invoice" minOccurs="0" maxOccurs="unbounded"/>
+				<xsd:element ref="crn:CreditNote" minOccurs="0" maxOccurs="unbounded"/>
+				<xsd:element ref="dbn:DebitNote" minOccurs="0" maxOccurs="unbounded"/>
+				<xsd:element ref="dea:DespatchAdvice" minOccurs="0" maxOccurs="unbounded"/>
+			</xsd:choice>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:element name="Invoice" type="sci:ublInvoice"/>
+	<xsd:element name="CreditNote" type="sci:ublCreditNote"/>
+	<xsd:element name="DebitNote" type="sci:ublDebitNote"/>
+	<xsd:element name="DespatchAdvice" type="sci:ublDespatchAdvice"/>
+	<!--PRIMARY COMPLEX TYPES DEFINITION-->
+	<xsd:complexType name="ublInvoice">
+		<xsd:complexContent>
+			<xsd:extension base="inv:InvoiceType"/>
+		</xsd:complexContent>
+	</xsd:complexType>
+	<xsd:complexType name="ublCreditNote">
+		<xsd:complexContent>
+			<xsd:extension base="crn:CreditNoteType"/>
+		</xsd:complexContent>
+	</xsd:complexType>
+	<xsd:complexType name="ublDebitNote">
+		<xsd:complexContent>
+			<xsd:extension base="dbn:DebitNoteType"/>
+		</xsd:complexContent>
+	</xsd:complexType>
+	<xsd:complexType name="ublDespatchAdvice">
+		<xsd:complexContent>
+			<xsd:extension base="dea:DespatchAdviceType"/>
+		</xsd:complexContent>
+	</xsd:complexType>
+</xsd:schema>
