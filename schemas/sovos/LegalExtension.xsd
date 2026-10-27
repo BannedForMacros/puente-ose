@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xsd:schema xmlns:leg="http://www.sovos.com/namespaces/sovosExtensions/LegalExtension" xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="http://www.sovos.com/namespaces/sovosExtensions/LegalExtension" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xsd:element name="LegalExtension" type="leg:LegalExtensionType">
+		<xsd:annotation>
+			<xsd:documentation>Version</xsd:documentation>
+			<xsd:documentation>Legal Generic Extension</xsd:documentation>
+		</xsd:annotation>
+	</xsd:element>
+	<!--MAIN COMPLEX TYPE-->
+	<xsd:complexType name="LegalExtensionType">
+		<xsd:sequence>
+			<xsd:element name="CountryIdentificationCode" type="xsd:string" minOccurs="0"/>
+			<xsd:element name="Legal" type="leg:LegalType" minOccurs="0"/>
+			<xsd:element name="LegalAddon" type="leg:LegalAddonType" minOccurs="0" maxOccurs="unbounded"/>
+			<xsd:element name="CustomerData" type="leg:CustomerDataType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="LegalType">
+		<xsd:sequence>
+			<xsd:element name="HeaderFields" type="leg:HeaderFieldsType" minOccurs="0"/>
+			<xsd:element name="LineFields" type="leg:LineFieldsType" minOccurs="0"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="LegalAddonType">
+		<xsd:sequence>
+			<xsd:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="CustomerDataType">
+		<xsd:annotation>
+			<xsd:documentation>Here you can add any XML structure that you are using for this purpose. The only condition is to include also de Schema that supports your structure, this will allow you to have a valid file.</xsd:documentation>
+		</xsd:annotation>
+		<xsd:sequence>
+			<xsd:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<!--PRIMARY COMPLEX TYPES DEFINITION-->
+	<xsd:complexType name="HeaderFieldsType">
+		<xsd:sequence>
+			<xsd:element name="Field" type="leg:FieldType" minOccurs="0" maxOccurs="unbounded"/>
+			<xsd:element name="GroupInformation" type="leg:GroupInformationType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="LineFieldsType">
+		<xsd:sequence>
+			<xsd:element name="Line" type="leg:LineType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="FieldType">
+		<xsd:simpleContent>
+			<xsd:extension base="xsd:string">
+				<xsd:attribute name="name" type="xsd:string" use="optional"/>
+				<!--<xsd:attribute name="value" type="xsd:string" use="optional"/>-->
+			</xsd:extension>
+		</xsd:simpleContent>
+	</xsd:complexType>
+	<xsd:complexType name="GroupInformationType">
+		<xsd:sequence>
+			<xsd:element name="Id" type="leg:IdType" minOccurs="0" maxOccurs="1"/>
+			<xsd:element name="Field" type="leg:FieldType" minOccurs="0" maxOccurs="unbounded"/>
+			<xsd:element name="GroupInformation" type="leg:GroupInformationType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="LineType">
+		<xsd:sequence>
+			<xsd:element name="LineId" type="leg:IdType" minOccurs="0" maxOccurs="1"/>
+			<xsd:element name="Field" type="leg:FieldType" minOccurs="0" maxOccurs="unbounded"/>
+			<xsd:element name="GroupInformation" type="leg:GroupInformationType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="IdType">
+		<xsd:simpleContent>
+			<xsd:extension base="xsd:string">
+				<xsd:attribute name="schemeID" type="xsd:string" use="optional"/>
+			</xsd:extension>
+		</xsd:simpleContent>
+	</xsd:complexType>
+</xsd:schema>
