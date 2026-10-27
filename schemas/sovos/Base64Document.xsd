@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- edited with XMLSpy v2020 sp1 (x64) (http://www.altova.com) by Emanuel Castro (SOVOS) -->
+<xsd:schema xmlns:enc="http://www.sovos.com/namespaces/base64Document" targetNamespace="http://www.sovos.com/namespaces/base64Document" xmlns:xsd="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xsd:element name="Base64Document" type="enc:Base64DocumentType">
+		<xsd:annotation>
+			<xsd:documentation>Version: 4.0</xsd:documentation>
+			<xsd:documentation>Base 64 document field. For archiving process.</xsd:documentation>
+		</xsd:annotation>
+	</xsd:element>
+	<!--MAIN COMPLEX TYPE-->
+	<xsd:complexType name="Base64DocumentType">
+		<xsd:sequence>
+			<xsd:element name="EmbeddedDocument" type="enc:EmbeddedDocumentType" minOccurs="0"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<!--PRIMARY COMPLEX TYPES DEFINITION-->
+	<xsd:complexType name="EmbeddedDocumentType">
+		<xsd:simpleContent>
+			<xsd:extension base="xsd:base64Binary">
+				<xsd:attribute name="id" use="optional" type="xsd:int"/>
+				<xsd:attribute name="fileName" use="optional" type="xsd:string"/>
+				<xsd:attribute name="mimeCode" use="optional" type="xsd:string"/>
+			</xsd:extension>
+		</xsd:simpleContent>
+	</xsd:complexType>
+</xsd:schema>
