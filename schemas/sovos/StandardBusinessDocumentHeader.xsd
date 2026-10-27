@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<xs:schema xmlns:svs="http://www.sovos.com/namespaces/sovosDocument" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="http://www.unece.org/cefact/namespaces/StandardBusinessDocumentHeader" targetNamespace="http://www.unece.org/cefact/namespaces/StandardBusinessDocumentHeader" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xs:include schemaLocation="DocumentIdentification.xsd"/>
+	<xs:include schemaLocation="Partner.xsd"/>
+	<xs:include schemaLocation="Manifest.xsd"/>
+	<xs:include schemaLocation="BusinessScope.xsd"/>
+	<xs:import namespace="http://www.sovos.com/namespaces/sovosDocument" schemaLocation="./SovosDocument.xsd"/>
+	<xs:import namespace="http://www.sovos.com/namespaces/sovosExtensions" schemaLocation="./SovosExtension.xsd"/>
+	<xs:element name="StandardBusinessDocument" type="StandardBusinessDocument"/>
+	<xs:annotation>
+		<xs:documentation>Version: 1.1</xs:documentation>
+	</xs:annotation>
+	<xs:complexType name="StandardBusinessDocument">
+		<xs:sequence>
+			<xs:element name="StandardBusinessDocumentHeader" type="StandardBusinessDocumentHeader" minOccurs="0"/>
+			<xs:element ref="svs:SovosDocument" minOccurs="0" maxOccurs="1"/>
+			<!--<xs:any namespace="##other" processContents="lax"/>-->
+		</xs:sequence>
+	</xs:complexType>
+	<xs:complexType name="StandardBusinessDocumentHeader">
+		<xs:sequence>
+			<xs:element name="HeaderVersion" type="xs:string"/>
+			<xs:element name="Sender" type="Partner" maxOccurs="unbounded"/>
+			<xs:element name="Receiver" type="Partner" minOccurs="0"/>
+			<xs:element name="DocumentIdentification" type="DocumentIdentification"/>
+			<xs:element name="Manifest" type="Manifest" minOccurs="0"/>
+			<xs:element name="BusinessScope" type="BusinessScope" minOccurs="0"/>
+		</xs:sequence>
+	</xs:complexType>
+	<!--<xs:element name="StandardBusinessDocumentHeader" type="StandardBusinessDocumentHeader"/>-->
+</xs:schema>
