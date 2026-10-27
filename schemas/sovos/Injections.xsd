@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- edited with XMLSpy v2020 sp1 (x64) (http://www.altova.com) by Emanuel Castro (SOVOS) -->
+<xsd:schema xmlns:inj="http://www.sovos.com/namespaces/injections" targetNamespace="http://www.sovos.com/namespaces/injections" xmlns:xsd="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xsd:element name="Injections" type="inj:InjectionsType">
+		<xsd:annotation>
+			<xsd:documentation>Version: 4.0</xsd:documentation>
+			<xsd:documentation>Injections container used to retrieve information related to responces.</xsd:documentation>
+		</xsd:annotation>
+	</xsd:element>
+	<!--MAIN COMPLEX TYPE-->
+	<xsd:complexType name="InjectionsType">
+		<xsd:sequence>
+			<xsd:element name="GroupFields" type="inj:GroupFieldsType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<!--PRIMARY COMPLEX TYPES DEFINITION-->
+	<xsd:complexType name="GroupFieldsType">
+		<xsd:sequence>
+			<xsd:element name="Field" type="inj:FieldType" minOccurs="0" maxOccurs="unbounded"/>
+			<!--<xsd:element name="GroupFields" type="inj:GroupFieldsType" minOccurs="0"/>-->
+		</xsd:sequence>
+		<xsd:attribute name="eventName" use="optional"/>
+	</xsd:complexType>
+	<xsd:complexType name="FieldType">
+		<xsd:simpleContent>
+			<xsd:extension base="xsd:string">
+				<xsd:attribute name="name" use="optional" type="xsd:string"/>
+				<xsd:attribute name="type" use="optional" type="xsd:string"/>
+			</xsd:extension>
+		</xsd:simpleContent>
+	</xsd:complexType>
+</xsd:schema>
