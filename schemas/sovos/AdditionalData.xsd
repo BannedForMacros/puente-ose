@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- edited with XMLSpy v2020 sp1 (x64) (http://www.altova.com) by Emanuel Castro (SOVOS) -->
+<xsd:schema xmlns:ad="http://www.sovos.com/namespaces/additionalData" targetNamespace="http://www.sovos.com/namespaces/additionalData" xmlns:xsd="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xsd:element name="AdditionalData" type="ad:AdditionalDataType">
+		<xsd:annotation>
+			<xsd:documentation>Version: 4.0</xsd:documentation>
+			<xsd:documentation>Additional data container used to store information not necessary to report to the goverment tax authority.</xsd:documentation>
+		</xsd:annotation>
+	</xsd:element>
+	<!--MAIN COMPLEX TYPE-->
+	<xsd:complexType name="AdditionalDataType">
+		<xsd:sequence>
+			<xsd:element name="HeaderFields" type="ad:HeaderFieldsType" minOccurs="0"/>
+			<xsd:element name="ItemFields" type="ad:ItemFieldsType" minOccurs="0"/>
+			<xsd:element name="Field" type="ad:FieldType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<!--PRIMARY COMPLEX TYPES DEFINITION-->
+	<xsd:complexType name="HeaderFieldsType">
+		<xsd:sequence>
+			<xsd:element name="Field" type="ad:FieldType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="ItemFieldsType">
+		<xsd:sequence>
+			<xsd:element name="Field" type="ad:FieldType" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="FieldType">
+		<xsd:simpleContent>
+			<xsd:extension base="xsd:string">
+				<xsd:attribute name="name" use="optional" type="xsd:string"/>
+				<xsd:attribute name="item" use="optional" type="xsd:string"/>
+				<xsd:attribute name="type" use="optional" type="xsd:string"/>
+			</xsd:extension>
+		</xsd:simpleContent>
+	</xsd:complexType>
+</xsd:schema>
