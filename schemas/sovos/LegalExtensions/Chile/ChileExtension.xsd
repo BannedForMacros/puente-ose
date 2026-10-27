@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- edited with XMLSpy v2020 sp1 (x64) (http://www.altova.com) by Emanuel Castro (SOVOS) -->
+<xsd:schema xmlns:chl="http://www.sovos.com/namespaces/sovosExtensions/Chile" xmlns:xsd="http://www.w3.org/2001/XMLSchema" targetNamespace="http://www.sovos.com/namespaces/sovosExtensions/Chile" elementFormDefault="qualified" attributeFormDefault="unqualified">
+	<xsd:element name="Chile" type="n1:ChileExtensionType" xmlns:n1="http://www.sovos.com/namespaces/sovosExtensions/Chile">
+		<xsd:annotation>
+			<xsd:documentation>Version: 1.1</xsd:documentation>
+			<xsd:documentation>Chile custom fields.</xsd:documentation>
+			<xsd:documentation>Changelog: Modification of targetnamespace and its dependencies.</xsd:documentation>
+		</xsd:annotation>
+	</xsd:element>
+	<xsd:element name="InfoTicket">
+		<xsd:annotation>
+			<xsd:documentation>Informacion de la entrada</xsd:documentation>
+		</xsd:annotation>
+		<xsd:complexType>
+			<xsd:sequence>
+				<xsd:element name="FolioTicket">
+					<xsd:annotation>
+						<xsd:documentation>Corresponde a la numeración única para el evento.</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:positiveInteger">
+							<xsd:totalDigits value="6"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="FchGenera">
+					<xsd:annotation>
+						<xsd:documentation>Corresponde a la fecha y hora de generación del ticket
+(AAAA-MM-DDThh:mm:ss)</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:dateTime">
+							<xsd:minInclusive value="2010-03-10T00:00:00"/>
+							<xsd:maxInclusive value="2050-12-31T23:59:59"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="NmbEvento">
+					<xsd:annotation>
+						<xsd:documentation>Nombre del Espectáculo</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:string">
+							<xsd:maxLength value="80"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="TpoTicket">
+					<xsd:annotation>
+						<xsd:documentation>Tipo de ticket, Por ejemplo: Adulto, Niño, etc</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:string">
+							<xsd:maxLength value="10"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="CdgEvento">
+					<xsd:annotation>
+						<xsd:documentation>Código asociado al Evento</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:string">
+							<xsd:maxLength value="5"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="FchEvento">
+					<xsd:annotation>
+						<xsd:documentation>Fecha y hora de realización del evento AAAA-MM-DDThh:mm:ss)</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:dateTime">
+							<xsd:minInclusive value="2010-03-10T00:00:00"/>
+							<xsd:maxInclusive value="2050-12-31T23:59:59"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="LugarEvento">
+					<xsd:annotation>
+						<xsd:documentation>Dirección o identificación del recinto donde se realizará el  Espectáculo</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:string">
+							<xsd:maxLength value="80"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="UbicEvento">
+					<xsd:annotation>
+						<xsd:documentation>Sector/Sección de la ubicación en el evento</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:string">
+							<xsd:maxLength value="20"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="FilaUbicEvento" minOccurs="0">
+					<xsd:annotation>
+						<xsd:documentation>Fila correspondiente a la Ubicación en el evento</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:string">
+							<xsd:maxLength value="3"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+				<xsd:element name="AsntoUbicEvento" minOccurs="0">
+					<xsd:annotation>
+						<xsd:documentation>N° de Asiento correspondiente a la Ubicación en el evento</xsd:documentation>
+					</xsd:annotation>
+					<xsd:simpleType>
+						<xsd:restriction base="xsd:string">
+							<xsd:maxLength value="3"/>
+						</xsd:restriction>
+					</xsd:simpleType>
+				</xsd:element>
+			</xsd:sequence>
+		</xsd:complexType>
+	</xsd:element>
+	<!--MAIN COMPLEX TYPE-->
+	<xsd:complexType name="ChileExtensionType">
+		<xsd:sequence>
+			<xsd:element name="Legal" type="n1:LegalType" minOccurs="0" xmlns:n1="http://www.sovos.com/namespaces/sovosExtensions/Chile"/>
+			<xsd:element name="LegalAddon" type="n1:AnyType" minOccurs="0" xmlns:n1="http://www.sovos.com/namespaces/sovosExtensions/Chile"/>
+			<xsd:element name="CustomerData" type="n1:AnyType" minOccurs="0" xmlns:n1="http://www.sovos.com/namespaces/sovosExtensions/Chile"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<!--PRIMARY COMPLEX TYPES DEFINITION-->
+	<xsd:complexType name="LegalType">
+		<xsd:sequence>
+			<xsd:element name="Detalle" type="n1:DetailType" minOccurs="0" maxOccurs="unbounded" xmlns:n1="http://www.sovos.com/namespaces/sovosExtensions/Chile"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="AnyType">
+		<xsd:sequence>
+			<xsd:any minOccurs="0"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="DetailType">
+		<xsd:sequence>
+			<xsd:element name="NroLinDet" type="xsd:int"/>
+			<xsd:element ref="n1:InfoTicket" minOccurs="0" xmlns:n1="http://www.sovos.com/namespaces/sovosExtensions/Chile"/>
+		</xsd:sequence>
+	</xsd:complexType>
+</xsd:schema>
