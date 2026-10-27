@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xsd:schema xmlns:svs="http://www.sovos.com/namespaces/sovosDocument" targetNamespace="http://www.sovos.com/namespaces/sovosDocument" xmlns:ad="http://www.sovos.com/namespaces/additionalData" xmlns:inj="http://www.sovos.com/namespaces/injections" xmlns:sci="http://www.sovos.com/namespaces/sovosCanonicalInvoice" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:enc="http://www.sovos.com/namespaces/base64Document" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2">
+	<xsd:import namespace="http://www.sovos.com/namespaces/additionalData" schemaLocation="AdditionalData.xsd"/>
+	<xsd:import namespace="http://www.sovos.com/namespaces/injections" schemaLocation="Injections.xsd"/>
+	<xsd:import namespace="http://www.sovos.com/namespaces/sovosCanonicalInvoice" schemaLocation="SovosCanonicalInvoice.xsd"/>
+	<xsd:import namespace="http://www.sovos.com/namespaces/base64Document" schemaLocation="Base64Document.xsd"/>
+	<xsd:import namespace="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"/>
+	<xsd:element name="SovosDocument" type="svs:SovosDocumentType">
+		<xsd:annotation>
+			<xsd:documentation>Version: 4.1</xsd:documentation>
+			<xsd:documentation>Modifications in SovosLegalDocument/Base64Document and SovosLegalDocument/LegalSchema. Changed from an element to a reference of the element</xsd:documentation>
+		</xsd:annotation>
+	</xsd:element>
+	<!--MAIN COMPLEX TYPE-->
+	<xsd:complexType name="SovosDocumentType">
+		<xsd:sequence>
+			<xsd:choice>
+				<xsd:element ref="svs:SovosLegalDocument" minOccurs="0"/>
+				<xsd:element ref="sci:SovosCanonicalInvoice" minOccurs="0"/>
+			</xsd:choice>
+			<xsd:element ref="ad:AdditionalData" minOccurs="0" maxOccurs="unbounded"/>
+			<xsd:element ref="inj:Injections" minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="LegalSchemaType">
+		<xsd:sequence>
+			<xsd:any minOccurs="0" maxOccurs="unbounded"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:element name="SovosLegalDocument" type="svs:SovosLegalDocumentType"/>
+	<xsd:element name="SovosCanonicalInvoice" type="sci:SovosCanonicalInvoiceType"/>
+	<xsd:element name="Base64Document" type="enc:Base64DocumentType"/>
+	<xsd:element name="AdditionalData" type="ad:AdditionalDataType"/>
+	<xsd:element name="LegalSchema" type="svs:LegalSchemaType"/>
+	<!--PRIMARY COMPLEX TYPES DEFINITION-->
+	<xsd:complexType name="SovosLegalDocumentType">
+		<xsd:sequence>
+			<xsd:element ref="enc:Base64Document" minOccurs="0" maxOccurs="unbounded"/>
+			<xsd:element ref="cac:Attachment" minOccurs="0" maxOccurs="unbounded"/>
+			<xsd:element ref="svs:LegalSchema" minOccurs="0"/>
+		</xsd:sequence>
+	</xsd:complexType>
+</xsd:schema>
