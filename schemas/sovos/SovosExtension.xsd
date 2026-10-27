@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xsd:schema xmlns:sov="http://www.sovos.com/namespaces/sovosExtensions" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:ad="http://www.sovos.com/namespaces/additionalData" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:mex="http://www.sovos.com/namespaces/sovosExtensions/Mexico" xmlns:chl="ChileExtension.xsd" xmlns:leg="http://www.sovos.com/namespaces/sovosExtensions/LegalExtension" xmlns:n1="http://www.sovos.com/namespaces/sovosExtensions/Mexico" xmlns:ns1="http://www.sovos.com/namespaces/sovosExtensions/Chile" targetNamespace="http://www.sovos.com/namespaces/sovosExtensions" elementFormDefault="qualified" attributeFormDefault="unqualified" version="1.0">
+	<xsd:import namespace="http://www.sovos.com/namespaces/sovosExtensions/Mexico" schemaLocation="LegalExtensions/Mexico/MexicoExtension.xsd"/>
+	<xsd:import namespace="http://www.sovos.com/namespaces/sovosExtensions/Chile" schemaLocation="LegalExtensions/Chile/ChileExtension.xsd"/>
+	<xsd:import namespace="http://www.sovos.com/namespaces/sovosExtensions/LegalExtension" schemaLocation="LegalExtension.xsd"/>
+	<xsd:import namespace="http://www.sovos.com/namespaces/additionalData" schemaLocation="AdditionalData.xsd"/>
+	<xsd:element name="SovosExtension" type="sov:SovosExtensionType"/>
+	<xsd:complexType name="SovosExtensionType">
+		<xsd:sequence>
+			<xsd:annotation>
+				<xsd:documentation>Version: 4.2</xsd:documentation>
+				<xsd:documentation>The main purpose of this extension is to group all custom fields for each SCI mandate in one custom canonical schema.</xsd:documentation>
+				<xsd:documentation>Changelog: Update of schemaLocation file for MexicoExtension</xsd:documentation>
+			</xsd:annotation>
+			<xsd:element ref="n1:Mexico" minOccurs="0" maxOccurs="1"/>
+			<xsd:element ref="ns1:Chile" minOccurs="0" maxOccurs="1"/>
+			<xsd:element ref="leg:LegalExtension" minOccurs="0" maxOccurs="1"/>
+			<xsd:element ref="ad:AdditionalData" minOccurs="0" maxOccurs="1"/>
+		</xsd:sequence>
+	</xsd:complexType>
+	<xsd:complexType name="MexicoExtensionType">
+		<xsd:complexContent>
+			<xsd:extension base="n1:MexicoExtensionType"/>
+		</xsd:complexContent>
+	</xsd:complexType>
+	<xsd:complexType name="ChileExtensionType">
+		<xsd:complexContent>
+			<xsd:extension base="ns1:ChileExtensionType"/>
+		</xsd:complexContent>
+	</xsd:complexType>
+	<xsd:complexType name="LegalExtensionType">
+		<xsd:complexContent>
+			<xsd:extension base="leg:LegalExtensionType"/>
+		</xsd:complexContent>
+	</xsd:complexType>
+	<xsd:complexType name="AdditionalDataType">
+		<xsd:complexContent>
+			<xsd:extension base="ad:AdditionalDataType"/>
+		</xsd:complexContent>
+	</xsd:complexType>
+	<xsd:element name="LegalExtension" type="sov:LegalExtensionType"/>
+</xsd:schema>
