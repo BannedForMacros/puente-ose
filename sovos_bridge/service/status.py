@@ -77,6 +77,7 @@ class StatusPoller:
                                           response_code=n.response_code)
             return
 
+        notifs = _current_attempt(notifs, row["enviado_en"])
         when = _issue_month(row)
         xml_path, pdf_path = row["xml_path"], row["pdf_path"]
         approved = rejected = None
@@ -239,6 +240,36 @@ class StatusPoller:
                 return
             self.db.mark_acked(ids)
             log.debug("Confirmadas %d notificaciones", len(ids))
+
+
+# Margen para diferencias de reloj entre este servidor y Sovos.
+CLOCK_SKEW_SECONDS = 120
+
+
+def _current_attempt(notifs: list[Notification], enviado_en: str | None) -> list[Notification]:
+    """Descarta notificaciones de envíos anteriores.
+
+    Al reenviar un comprobante rechazado, Sovos conserva el mismo documentId y
+    con includeAcknowledged=true devuelve también las respuestas de los
+    intentos previos: sin este filtro, un rechazo viejo se tomaría como el
+    resultado del reenvío. Las notificaciones sin fecha se conservan.
+    """
+    if not enviado_en:
+        return notifs
+    try:
+        limite = datetime.fromisoformat(enviado_en).timestamp() - CLOCK_SKEW_SECONDS
+    except ValueError:
+        return notifs
+    out = []
+    for n in notifs:
+        created = n.raw.get("createdDate") if isinstance(n.raw, dict) else None
+        try:
+            if created is not None and int(created) / 1000 < limite:
+                continue
+        except (TypeError, ValueError):
+            pass
+        out.append(n)
+    return out
 
 
 def _issue_month(row: sqlite3.Row) -> datetime:

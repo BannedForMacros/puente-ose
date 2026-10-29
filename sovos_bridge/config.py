@@ -22,6 +22,10 @@ class Settings(BaseModel):
     sovos_polling_system_id: str = "CN_SystemERP_Polling"
     sovos_status_mode: Literal["document", "global"] = "document"
     sovos_note_root: Literal["CreditNote", "Invoice"] = "CreditNote"
+    # auto = serie B -> BusinessToConsumer, serie F -> BusinessToBusiness
+    sovos_business_category: Literal["auto", "BusinessToBusiness", "BusinessToConsumer"] = "auto"
+    # Scope SubSchema: la guía de Sovos lo marca obligatorio ("-" si no aplica); vacío = no se envía
+    sovos_sub_schema: str = ""
     http_timeout_seconds: float = 60
     http_max_retries: int = Field(5, ge=0)
 

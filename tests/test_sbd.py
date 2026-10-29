@@ -101,3 +101,14 @@ def test_notas_reales_validan_xsd(path):
     ref = doc.referencia.serie_numero
     assert cn.findtext(f"{{{CAC}}}DiscrepancyResponse/{{{CBC}}}ReferenceID") == ref
     assert cn.findtext(f"{{{CAC}}}BillingReference/{{{CAC}}}InvoiceDocumentReference/{{{CBC}}}ID") == ref
+
+
+def test_sci_sigue_el_ejemplo_oficial_de_sovos_peru():
+    """Sin cac:Signature (la agrega Sovos), con ProfileID y PartyTaxScheme como en la colección Postman."""
+    root = build_sbd(parse_file(BOLETA_TXT))
+    validate_sbd(root)
+    inv = root.find("svs:SovosDocument/sci:SovosCanonicalInvoice", NS)[0]
+    assert inv.find(f"{{{CAC}}}Signature") is None
+    assert inv.findtext(f"{{{CBC}}}ProfileID") == "0101"
+    ids = [e.text for e in inv.iterfind(f".//{{{CAC}}}PartyTaxScheme/{{{CBC}}}CompanyID")]
+    assert ids == ["20437310841", "00000000"]

@@ -270,3 +270,19 @@ def test_status_y_reporte(settings, db, fake):
     contenido = path.read_text(encoding="utf-8-sig")
     assert contenido.splitlines()[0].startswith("clave;tipo;serie_numero;estado")
     assert "PACIENTE" not in contenido and "00000000" not in contenido
+
+
+def test_reenvio_ignora_notificaciones_de_intentos_anteriores(settings, db, fake):
+    """Sovos reutiliza el documentId: el rechazo viejo no debe cerrar el reenvío."""
+    pipe, poller = setup(settings, db, fake)
+    fake.queue("POST", "/v1/documents", accepted("doc-123"))
+    pipe.process(drop(settings))
+    enviado = datetime.fromisoformat(db.get(K)["enviado_en"])
+    viejo = notification("n-viejo", "RE", govt="2325", cloud="209")
+    viejo["createdDate"] = int((enviado - timedelta(hours=1)).timestamp() * 1000)
+    nuevo = notification("n-nuevo", "IP", cloud="101")
+    nuevo["createdDate"] = int(enviado.timestamp() * 1000)
+    fake.queue("GET", "/v1/documents/PE/doc-123/notifications", notifications_response(viejo, nuevo))
+    fake.queue("PUT", "/v1/notifications/PE", httpx.Response(200, json={"success": True}))
+    poller.run_once()
+    assert db.get(K)["estado"] == Estado.EN_PROCESO

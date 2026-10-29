@@ -42,6 +42,8 @@ DOC_TYPE = "Invoice"
 class SbdOptions:
     sender_system_id: str = "DefaultSystemERP"
     note_root: str = "CreditNote"
+    business_category: str = "auto"
+    sub_schema: str = ""
     forma_pago_defecto: str = "Contado"
 
 
@@ -98,11 +100,14 @@ def build_sbd(doc: Document, opts: SbdOptions = SbdOptions(), now: datetime | No
     _scope(bs, "CompanyCode", doc.ruc_emisor)
     _scope(bs, "SenderDocumentId", doc.clave)
     _scope(bs, "SenderSystemId", opts.sender_system_id)
-    _scope(bs, "BusinessCategory", business_category(doc))
+    _scope(bs, "BusinessCategory",
+           business_category(doc) if opts.business_category == "auto" else opts.business_category)
     _scope(bs, "Mapping.OutputSchema", output_schema)
     _scope(bs, "Mapping.TransformDocument", transform)
     if meta_schema:
         _scope(bs, "MetaSchema", meta_schema)
+    if opts.sub_schema:
+        _scope(bs, "SubSchema", opts.sub_schema)
     bp = _e(bs, "Scope")
     _e(bp, "Type", "BusinessProcess")
     _e(bp, "InstanceIdentifier", "")
@@ -110,7 +115,7 @@ def build_sbd(doc: Document, opts: SbdOptions = SbdOptions(), now: datetime | No
 
     sd = etree.SubElement(root, f"{{{SVS}}}SovosDocument")
     sci = etree.SubElement(sd, f"{{{SCI}}}SovosCanonicalInvoice")
-    sci.append(build_ubl(doc, note_root=opts.note_root, forma_pago_defecto=opts.forma_pago_defecto))
+    sci.append(build_ubl(doc, note_root=opts.note_root, forma_pago_defecto=opts.forma_pago_defecto, sovos_sci=True))
     return root
 
 

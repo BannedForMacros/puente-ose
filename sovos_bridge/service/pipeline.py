@@ -33,6 +33,8 @@ class Pipeline:
         self.client = client
         self.opts = SbdOptions(
             sender_system_id=settings.sovos_sender_system_id,
+            business_category=settings.sovos_business_category,
+            sub_schema=settings.sovos_sub_schema,
             note_root=settings.sovos_note_root,
             forma_pago_defecto=settings.forma_pago_defecto,
         )

@@ -58,7 +58,16 @@ def _fmt2(value: Decimal) -> str:
     return str(value.quantize(Decimal("0.01")))
 
 
-def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defecto: str = "Contado") -> etree._Element:
+def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defecto: str = "Contado",
+              sovos_sci: bool = False) -> etree._Element:
+    """UBL del comprobante.
+
+    sovos_sci=False: idéntico al XML que SUNAT aceptaba con el puente anterior.
+    sovos_sci=True: variante para el SCI de Sovos según su ejemplo oficial de
+    Perú (colección Postman "Peru - eInvoicing Compliance"): sin cac:Signature
+    (la agrega Sovos al firmar), con ProfileID (tipo de operación) y con el
+    documento de emisor y cliente también en PartyTaxScheme.
+    """
     name = root_name(doc, note_root)
     ns, prefix = ROOTS[name]
     b = _B(doc.moneda)
@@ -67,6 +76,9 @@ def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defect
     # --- cabecera ----------------------------------------------------------
     b.cbc(root, "UBLVersionID", "2.1")
     b.cbc(root, "CustomizationID", "2.0")
+    if sovos_sci and name == "Invoice" and doc.tipo_operacion:
+        b.cbc(root, "ProfileID", doc.tipo_operacion, schemeName="SUNAT:Identificador de Tipo de Operacion",
+              schemeAgencyName="PE:SUNAT", schemeURI=CAT + "17")
     b.cbc(root, "ID", doc.serie_numero)
     b.cbc(root, "IssueDate", doc.fecha_emision)
     if doc.hora_emision:
@@ -85,9 +97,10 @@ def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defect
     if doc.es_nota and doc.referencia:
         _reference(b, root, doc, name)
 
-    _signature(b, root, doc)
-    _supplier(b, root, doc.emisor)
-    _customer(b, root, doc.cliente)
+    if not sovos_sci:
+        _signature(b, root, doc)
+    _supplier(b, root, doc.emisor, tax_scheme=sovos_sci)
+    _customer(b, root, doc.cliente, tax_scheme=sovos_sci)
 
     if doc.tipo_comprobante == "01":
         pt = b.cac(root, "PaymentTerms")
@@ -206,19 +219,35 @@ def _address(b: _B, ple, p: Party, with_location: bool) -> None:
               listAgencyName=UNECE, listID="ISO 3166-1", listName="Country")
 
 
-def _supplier(b: _B, root, p: Party) -> None:
+def _party_tax_scheme(b: _B, party_el, p: Party, address_code: str = "") -> None:
+    """Identificación tributaria como en el SCI oficial de Sovos para Perú."""
+    pts = b.cac(party_el, "PartyTaxScheme")
+    b.cbc(pts, "RegistrationName", p.razon_social)
+    b.cbc(pts, "CompanyID", p.numero_documento, schemeID=p.tipo_documento,
+          schemeName="SUNAT:Identificador de Documento de Identidad", schemeAgencyName="PE:SUNAT",
+          schemeURI=CAT + "06")
+    if address_code:
+        b.cbc(b.cac(pts, "RegistrationAddress"), "AddressTypeCode", address_code)
+    b.cbc(b.cac(pts, "TaxScheme"), "ID", "-")
+
+
+def _supplier(b: _B, root, p: Party, tax_scheme: bool = False) -> None:
     party = b.cac(b.cac(root, "AccountingSupplierParty"), "Party")
     _party_id(b, party, p)
     if p.nombre_comercial:
         b.cbc(b.cac(party, "PartyName"), "Name", p.nombre_comercial)
+    if tax_scheme:
+        _party_tax_scheme(b, party, p, p.codigo_establecimiento)
     ple = b.cac(party, "PartyLegalEntity")
     b.cbc(ple, "RegistrationName", p.razon_social)
     _address(b, ple, p, with_location=True)
 
 
-def _customer(b: _B, root, p: Party) -> None:
+def _customer(b: _B, root, p: Party, tax_scheme: bool = False) -> None:
     party = b.cac(b.cac(root, "AccountingCustomerParty"), "Party")
     _party_id(b, party, p)
+    if tax_scheme:
+        _party_tax_scheme(b, party, p)
     ple = b.cac(party, "PartyLegalEntity")
     b.cbc(ple, "RegistrationName", p.razon_social)
     _address(b, ple, p, with_location=False)
