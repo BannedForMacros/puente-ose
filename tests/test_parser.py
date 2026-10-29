@@ -3,7 +3,7 @@ import pytest
 from sovos_bridge.parser import ParseError, parse_file, parse_filename, parse_text
 from sovos_bridge.parser.tokenizer import decode_bytes, split_fields, split_group
 
-from conftest import BOLETA_MULTI_TXT, BOLETA_TXT, note_text
+from conftest import BOLETA_MULTI_TXT, BOLETA_TXT, NOTA_FACTURA_TXT, NOTAS_TXT, note_text
 
 
 def test_split_respeta_corchetes():
@@ -70,6 +70,26 @@ def test_nota_con_referencia():
     assert d.es_nota and d.referencia.serie_numero == "BT05-00125304"
     assert (d.referencia.tipo_comprobante, d.referencia.codigo_motivo) == ("03", "01")
 
+
+
+@pytest.mark.parametrize("path", NOTAS_TXT, ids=lambda p: p.stem)
+def test_notas_reales_layout(path):
+    """Layout real de notas: IDE sin tipo, CAB corto, DET con impuestos en 13, DRF."""
+    d = parse_file(path)
+    assert d.tipo_comprobante == "07" and d.moneda == "PEN"
+    assert d.referencia.codigo_motivo == "06"
+    assert d.referencia.descripcion_motivo == "DEVOLUCIÓN TOTAL"
+    assert d.tributos[0].codigo == "1000" and d.total_impuestos == d.tributos[0].monto
+    assert d.items[0].total_impuestos == d.total_impuestos
+    assert d.leyendas and d.leyendas[0][0] == "1000"
+    assert not d.advertencias
+
+
+def test_nota_sobre_factura():
+    d = parse_file(NOTA_FACTURA_TXT)
+    assert (d.referencia.tipo_comprobante, d.referencia.serie_numero) == ("01", "FT01-00000838")
+    assert (d.totales["1001"], d.total_impuestos, d.importe_total) == ("17.80", "3.20", "21.00")
+    assert d.cliente.tipo_documento == "6"
 
 def test_faltan_registros():
     info = parse_filename("20437310841-03-BT05-00125304.txt")

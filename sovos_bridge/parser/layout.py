@@ -82,14 +82,54 @@ LAYOUTS: dict[str, dict[int, str]] = {
         12: "desconocido_12", 13: "desconocido_13",
         14: "total_impuestos",
     },
-    # PROVISIONAL: documento de referencia de notas de crédito/débito.
-    # Se ajusta al recibir el TXT real de una nota.
-    "REF": {
-        1: "serie_numero",           # comprobante afectado, ej. BT05-00125304
-        2: "tipo_comprobante",       # 01 / 03
+}
+
+# Notas de crédito/débito: el sistema Java usa un layout más corto en IDE, CAB
+# y DET, y agrega DRF (documento de referencia). Confirmado con TXT reales de
+# BC01, BC06, BC07 y FC01; los registros que no aparecen aquí usan LAYOUTS.
+_NOTE_LAYOUTS: dict[str, dict[int, str]] = {
+    "IDE": {
+        1: "serie_numero",
+        2: "fecha_emision",
+        3: "hora_emision",
+        4: "moneda",                 # sin tipo de comprobante: se toma del nombre
+    },
+    "CAB": {
+        1: "total_cod_1", 2: "total_monto_1",
+        3: "total_cod_2", 4: "total_monto_2",
+        5: "desconocido_5", 6: "desconocido_6",
+        7: "tributos",               # [código|monto...]
+        8: "desconocido_8",
+        9: "importe_total",
+        10: "leyendas",              # [código|texto...]
+        11: "total_impuestos",
+    },
+    "DET": {
+        1: "numero_item",
+        2: "codigo",
+        3: "descripcion",
+        4: "cantidad",
+        5: "unidad_medida",
+        6: "valor_unitario",
+        7: "precio_unitario",
+        8: "tributo",                # [código|monto|afectación|base|porcentaje]
+        9: "valor_venta",
+        10: "desconocido_10", 11: "desconocido_11", 12: "desconocido_12",
+        13: "total_impuestos",
+    },
+    "DRF": {
+        1: "tipo_comprobante",       # 01 / 03 del comprobante afectado
+        2: "serie_numero",           # ej. BT01-00087912
         3: "codigo_motivo",          # catálogo 09 (NC) o 10 (ND)
         4: "descripcion_motivo",
     },
+}
+
+LAYOUTS_BY_TYPE: dict[str, dict[str, dict[int, str]]] = {
+    "01": LAYOUTS,
+    "03": LAYOUTS,
+    "07": {**LAYOUTS, **_NOTE_LAYOUTS},
+    "08": {**LAYOUTS, **_NOTE_LAYOUTS},  # nota de débito: sin ejemplo real aún, se asume igual a la NC
 }
 
 # Registros que pueden repetirse (una línea por ítem).
@@ -99,6 +139,6 @@ REPEATABLE = {"DET"}
 REQUIRED = {
     "01": ("IDE", "EMI", "REC", "CAB", "DET"),
     "03": ("IDE", "EMI", "REC", "CAB", "DET"),
-    "07": ("IDE", "EMI", "REC", "CAB", "DET", "REF"),
-    "08": ("IDE", "EMI", "REC", "CAB", "DET", "REF"),
+    "07": ("IDE", "EMI", "REC", "CAB", "DET", "DRF"),
+    "08": ("IDE", "EMI", "REC", "CAB", "DET", "DRF"),
 }

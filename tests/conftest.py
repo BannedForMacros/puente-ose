@@ -24,12 +24,22 @@ FACTURA_TXT = DATA / "20437310841-01-FT01-00000758.txt"
 FACTURA_XML = SAMPLES / "xml" / "20437310841-01-FT01-00000758.xml"
 
 
+NOTA_BOLETA_TXT = DATA / "20437310841-07-BC01-00000770.txt"
+NOTA_FACTURA_TXT = DATA / "20437310841-07-FC01-00000050.txt"
+NOTAS_TXT = sorted(DATA.glob("20437310841-07-*.txt"))
+
+
 def note_text(tipo: str = "07", serie: str = "BC01", numero: str = "00000001",
-              ref: str = "REF|BT05-00125304|03|01|ANULACION DE LA OPERACION") -> str:
-    """Nota de crédito/débito sintética a partir de la boleta de muestra."""
-    txt = BOLETA_TXT.read_text(encoding="utf-8")
-    txt = txt.replace("|BT05-00125304|", f"|{serie}-{numero}|").replace("|16:22:53|03|", f"|16:22:53|{tipo}|")
-    return txt + (ref + "\r\n" if ref else "")
+              ref: str | None = "DRF|03|BT05-00125304|01|ANULACION DE LA OPERACION") -> str:
+    """Nota a partir de la NC real BC01-00000770; `ref` reemplaza la línea DRF.
+
+    El IDE de las notas no trae el tipo: 07/08 sale del nombre del archivo.
+    """
+    lines = NOTA_BOLETA_TXT.read_text(encoding="utf-8").splitlines()
+    lines = [l.replace("|BC01-00000770|", f"|{serie}-{numero}|") for l in lines if not l.startswith("DRF|")]
+    if ref:
+        lines.append(ref)
+    return "\r\n".join(lines) + "\r\n"
 
 
 @pytest.fixture

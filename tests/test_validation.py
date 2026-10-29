@@ -48,7 +48,7 @@ def test_serie_de_boleta_en_factura(tmp_path):
 
 def test_nota_sin_referencia():
     info = parse_filename("20437310841-07-BC01-00000001.txt")
-    txt = note_text(ref="REF|||")
+    txt = note_text(ref="DRF|||")
     r = validate(parse_text(txt, info), info, RUC)
     assert any("documento de referencia" in e for e in r.errores)
 

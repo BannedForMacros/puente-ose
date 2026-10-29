@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from sovos_bridge.parser.layout import LAYOUTS, REPEATABLE, REQUIRED
+from sovos_bridge.parser.layout import LAYOUTS, LAYOUTS_BY_TYPE, REPEATABLE, REQUIRED
 from sovos_bridge.parser.models import Document, Item, Party, Reference, Tax
 from sovos_bridge.parser.tokenizer import decode_bytes, pairs, split_fields, split_group
 
@@ -50,8 +50,7 @@ def parse_filename(name: str) -> FileInfo:
     )
 
 
-def _named(record: str, fields: list[str]) -> dict[str, str]:
-    layout = LAYOUTS[record]
+def _named(layout: dict[int, str], fields: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for pos, value in enumerate(fields[1:], start=1):
         name = layout.get(pos, f"extra_{pos}")
@@ -66,7 +65,8 @@ def _warn_unknown(record: str, values: dict[str, str], warnings: list[str]) -> N
             warnings.append(f"{record} posición {pos} trae un valor no mapeado: '{value}'")
 
 
-def read_records(text: str) -> dict[str, list[dict[str, str]]]:
+def read_records(text: str, tipo: str = "03") -> dict[str, list[dict[str, str]]]:
+    layouts = LAYOUTS_BY_TYPE.get(tipo, LAYOUTS)
     records: dict[str, list[dict[str, str]]] = {}
     for n, line in enumerate(text.splitlines(), start=1):
         line = line.rstrip("\r\n")
@@ -74,12 +74,12 @@ def read_records(text: str) -> dict[str, list[dict[str, str]]]:
             continue
         fields = split_fields(line)
         rtype = fields[0].strip().upper()
-        if rtype not in LAYOUTS:
+        if rtype not in layouts:
             log.warning("Línea %d: tipo de registro desconocido '%s', se ignora", n, rtype)
             continue
         if rtype in records and rtype not in REPEATABLE:
             raise ParseError(f"Línea {n}: el registro {rtype} aparece más de una vez")
-        records.setdefault(rtype, []).append(_named(rtype, fields))
+        records.setdefault(rtype, []).append(_named(layouts[rtype], fields))
     return records
 
 
@@ -88,10 +88,10 @@ def _party(values: dict[str, str]) -> Party:
 
 
 def parse_text(text: str, info: FileInfo, encoding: str = "utf-8") -> Document:
-    records = read_records(text)
     required = REQUIRED.get(info.tipo)
     if required is None:
         raise ParseError(f"Tipo de comprobante '{info.tipo}' no soportado")
+    records = read_records(text, info.tipo)
     missing = [r for r in required if r not in records]
     if missing:
         raise ParseError(f"Faltan registros obligatorios en el TXT: {', '.join(missing)}")
@@ -136,8 +136,8 @@ def parse_text(text: str, info: FileInfo, encoding: str = "utf-8") -> Document:
         ))
 
     referencia = None
-    if "REF" in records:
-        ref = records["REF"][0]
+    if "DRF" in records:
+        ref = records["DRF"][0]
         referencia = Reference(
             serie_numero=ref.get("serie_numero", ""),
             tipo_comprobante=ref.get("tipo_comprobante", ""),
@@ -147,7 +147,8 @@ def parse_text(text: str, info: FileInfo, encoding: str = "utf-8") -> Document:
 
     doc = Document(
         ruc_emisor=emi.get("numero_documento", ""),
-        tipo_comprobante=ide.get("tipo_comprobante", ""),
+        # El IDE de las notas no trae el tipo: se usa el del nombre del archivo.
+        tipo_comprobante=ide.get("tipo_comprobante", "") or info.tipo,
         serie_numero=ide.get("serie_numero", "").upper(),
         fecha_emision=ide.get("fecha_emision", ""),
         hora_emision=ide.get("hora_emision", ""),
