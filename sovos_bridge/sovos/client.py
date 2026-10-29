@@ -155,8 +155,11 @@ class SovosClient:
             if status >= 500:
                 safe = idempotent or status in POST_SAFE_5XX
                 if not safe:
-                    raise SovosConnectionError(f"Sovos respondió HTTP {status} al recibir el documento",
-                                               transmitted=True, status=status)
+                    # correlationId y mensaje de Sovos: lo que pide su soporte para rastrear el envío.
+                    raise SovosConnectionError(
+                        f"Sovos respondió HTTP {status} al recibir el documento "
+                        f"(correlationId={correlation}): {_error_message(resp)}",
+                        transmitted=True, status=status)
                 if attempt >= self.max_retries:
                     raise SovosConnectionError(f"Sovos respondió HTTP {status} tras {attempt + 1} intentos",
                                                transmitted=False, status=status)
@@ -176,6 +179,16 @@ def _retry_after(resp: httpx.Response) -> float:
         return float(resp.headers.get("Retry-After", "0"))
     except ValueError:
         return 0.0
+
+
+def _error_message(resp: httpx.Response) -> str:
+    """Mensaje de error de Sovos: {"message": ..., "errors": [{"message": ...}]}."""
+    body = _json(resp)
+    if not isinstance(body, dict):
+        return resp.text[:300]
+    parts = [str(body.get("message") or "")]
+    parts += [str(e.get("message")) for e in body.get("errors") or [] if isinstance(e, dict) and e.get("message")]
+    return " | ".join(p for p in parts if p)[:500] or resp.text[:300]
 
 
 def _json(resp: httpx.Response) -> Any:

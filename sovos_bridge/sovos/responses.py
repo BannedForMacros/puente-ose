@@ -153,8 +153,11 @@ def _fill_from_application_response(n: Notification) -> None:
             code = (el.text or "").strip()
             if list_id == "scicloudstatuscode" and not n.cloud_code:
                 n.cloud_code = code
-            elif list_id == "scigovtstatuscode" and not n.govt_code:
-                n.govt_code, n.govt_message = code, n.govt_message or reason_text
+            elif list_id == "scigovtstatuscode":
+                # El código suele venir ya en metadata, pero el texto solo en el XML.
+                n.govt_code = n.govt_code or code
+                if not n.govt_message and code == n.govt_code:
+                    n.govt_message = reason_text
             elif list_id == "scistatusaction" and not n.action:
                 n.action = code.upper()
         elif name == "EmbeddedDocumentBinaryObject" and el.text:
