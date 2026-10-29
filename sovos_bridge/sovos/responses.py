@@ -160,6 +160,9 @@ def _fill_from_application_response(n: Notification) -> None:
                     n.govt_message = reason_text
             elif list_id == "scistatusaction" and not n.action:
                 n.action = code.upper()
+            elif list_id == "sciinternalvalidationstatuscode" and reason_text and not n.govt_message:
+                # Errores internos de Sovos (p. ej. 410 al firmar): el motivo real viene aquí.
+                n.govt_message = reason_text
         elif name == "EmbeddedDocumentBinaryObject" and el.text:
             data = _b64(el.text)
             if data:
