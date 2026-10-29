@@ -108,3 +108,19 @@ def test_xml_legal_con_raiz_sin_prefijo(tmp_path):
     pfx, _ = make_pfx(tmp_path)
     signed = Signer.from_pkcs12(pfx, "clave").sign(build_ubl(parse_file(BOLETA_TXT), ubl_extensions=True), "S")
     assert etree.tostring(signed).startswith(b'<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"')
+
+
+def test_xml_firmado_solo_ascii_y_firma_valida(settings, db, fake, tmp_path):
+    """Tildes/Ñ van como referencias numéricas: Sovos no puede alterarlas y la firma no cambia."""
+    pfx, cert = make_pfx(tmp_path)
+    s = settings.model_copy(update={"sovos_signing_mode": "propio", "cert_path": pfx,
+                                    "cert_password": SecretStr("clave")})
+    fake.queue("POST", "/v1/documents", accepted("doc-x"))
+    src = s.inbox_dir / BOLETA_TXT.name
+    src.write_bytes(BOLETA_TXT.read_bytes())     # trae "NIÑOS"
+    Pipeline(s, db, fake.client()).process(src)
+    sbd = etree.fromstring(decode_sbd(fake.sent("/v1/documents", "POST")[0]))
+    legal = base64.b64decode(sbd.find(".//enc:EmbeddedDocument", NS).text)
+    assert legal.startswith(b'<?xml version="1.0" encoding="UTF-8"?>') and max(legal) < 128
+    assert b"NI&#209;OS" in legal
+    XMLVerifier().verify(legal, x509_cert=cert.public_bytes(Encoding.PEM).decode())

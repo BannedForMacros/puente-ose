@@ -168,7 +168,11 @@ class Pipeline:
         ubl = build_ubl(doc, note_root=self.opts.note_root, forma_pago_defecto=self.opts.forma_pago_defecto,
                         ubl_extensions=True)
         signed = self.signer.sign(ubl, f"SIGN_{clave}")
-        signed_xml = etree.tostring(signed, xml_declaration=True, encoding="UTF-8")
+        # Solo ASCII (tildes y Ñ como &#NNN;): Sovos altera los bytes no ASCII al recibir el
+        # documento y el OSE responde 2335 "documento alterado". El contenido canónico (y por
+        # lo tanto la firma) es idéntico; ASCII también es UTF-8 válido.
+        signed_xml = b'<?xml version="1.0" encoding="UTF-8"?>\n' + etree.tostring(
+            signed, encoding="US-ASCII", xml_declaration=False)
         dest = self.s.dry_run_dir if self.s.dry_run else files.month_dir(self.s.output_dir)
         dest.mkdir(parents=True, exist_ok=True)
         (dest / f"{clave}.firmado-local.xml").write_bytes(signed_xml)
