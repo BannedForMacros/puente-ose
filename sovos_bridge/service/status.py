@@ -260,16 +260,31 @@ def _current_attempt(notifs: list[Notification], enviado_en: str | None) -> list
         limite = datetime.fromisoformat(enviado_en).timestamp() - CLOCK_SKEW_SECONDS
     except ValueError:
         return notifs
+    # Se agrupa por transactionId: Sovos reintenta solo las transacciones fallidas y sus
+    # notificaciones nuevas pertenecen a envíos viejos. Vale el inicio de cada transacción.
+    inicio: dict[str, float] = {}
+    for n in notifs:
+        tx, created = _tx_and_time(n)
+        if tx and created is not None:
+            inicio[tx] = min(inicio.get(tx, created), created)
     out = []
     for n in notifs:
-        created = n.raw.get("createdDate") if isinstance(n.raw, dict) else None
-        try:
-            if created is not None and int(created) / 1000 < limite:
-                continue
-        except (TypeError, ValueError):
-            pass
+        tx, created = _tx_and_time(n)
+        ref = inicio.get(tx, created) if tx else created
+        if ref is not None and ref < limite:
+            continue
         out.append(n)
     return out
+
+
+def _tx_and_time(n: Notification) -> tuple[str, float | None]:
+    raw = n.raw if isinstance(n.raw, dict) else {}
+    meta = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+    try:
+        created = int(raw["createdDate"]) / 1000 if raw.get("createdDate") is not None else None
+    except (TypeError, ValueError):
+        created = None
+    return str(meta.get("transactionId") or ""), created
 
 
 def _issue_month(row: sqlite3.Row) -> datetime:

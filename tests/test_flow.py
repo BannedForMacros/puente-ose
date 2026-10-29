@@ -286,3 +286,26 @@ def test_reenvio_ignora_notificaciones_de_intentos_anteriores(settings, db, fake
     fake.queue("PUT", "/v1/notifications/PE", httpx.Response(200, json={"success": True}))
     poller.run_once()
     assert db.get(K)["estado"] == Estado.EN_PROCESO
+
+
+def test_reintentos_de_sovos_de_un_envio_viejo_no_cuentan(settings, db, fake):
+    """Sovos sigue notificando una transacción fallida anterior después del reenvío."""
+    pipe, poller = setup(settings, db, fake)
+    fake.queue("POST", "/v1/documents", accepted("doc-123"))
+    pipe.process(drop(settings))
+    enviado = datetime.fromisoformat(db.get(K)["enviado_en"])
+    ms = lambda dt: int(dt.timestamp() * 1000)
+    vieja_inicio = notification("v1", "IP", cloud="100")
+    vieja_inicio.update(createdDate=ms(enviado - timedelta(minutes=5)))
+    vieja_inicio["metadata"]["transactionId"] = "tx-vieja"
+    vieja_reintento = notification("v2", "RE", govt="2325", cloud="410")
+    vieja_reintento.update(createdDate=ms(enviado + timedelta(seconds=20)))
+    vieja_reintento["metadata"]["transactionId"] = "tx-vieja"
+    nueva = notification("n1", "IP", cloud="101")
+    nueva.update(createdDate=ms(enviado))
+    nueva["metadata"]["transactionId"] = "tx-nueva"
+    fake.queue("GET", "/v1/documents/PE/doc-123/notifications",
+               notifications_response(vieja_inicio, vieja_reintento, nueva))
+    fake.queue("PUT", "/v1/notifications/PE", httpx.Response(200, json={"success": True}))
+    poller.run_once()
+    assert db.get(K)["estado"] == Estado.EN_PROCESO

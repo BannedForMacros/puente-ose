@@ -21,7 +21,7 @@ import hashlib
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives.serialization import Encoding, pkcs12
+from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, pkcs12
 from cryptography.x509 import Certificate
 from lxml import etree
 
@@ -64,6 +64,17 @@ class Signer:
         if key is None or cert is None:
             raise SigningError("El archivo .pfx no contiene la clave privada y el certificado")
         return cls(key, cert, list(chain or []))
+
+    def export_legacy(self, password: str) -> bytes:
+        """Mismo certificado y clave en un .pfx con cifrado clásico (PBE-SHA1-3DES, MAC SHA1).
+
+        Algunos sistemas Java no abren .pfx cifrados con AES-256/PBKDF2 y responden
+        "keystore password was incorrect" aunque la contraseña sea correcta.
+        """
+        enc = (PrivateFormat.PKCS12.encryption_builder().kdf_rounds(2048)
+               .key_cert_algorithm(pkcs12.PBES.PBESv1SHA1And3KeyTripleDESCBC)
+               .hmac_hash(hashes.SHA1()).build(password.encode()))
+        return pkcs12.serialize_key_and_certificates(b"certificado", self._key, self._cert, self._chain or None, enc)
 
     @property
     def info(self) -> CertInfo:

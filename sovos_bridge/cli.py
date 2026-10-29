@@ -60,16 +60,19 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("ui", help="abrir solo el panel web (estados, reintentos, consulta a Sovos)")
     ce = sub.add_parser("certificado", help="mostrar serie y vigencia de un certificado .pfx/.p12")
     ce.add_argument("archivo", type=Path)
+    ce.add_argument("--legacy", type=Path, metavar="SALIDA.pfx",
+                    help="reexportar con cifrado clásico (3DES/SHA1) y la misma contraseña")
     return p
 
 
-def _cert_info(path: Path) -> int:
+def _cert_info(path: Path, legacy_out: Path | None = None) -> int:
     """Muestra los datos para compararlos con SOL (Registro de certificado digital)."""
     import getpass
 
     from sovos_bridge.sbd import Signer, SigningError
+    password = getpass.getpass("Contraseña del certificado (no se muestra): ")
     try:
-        signer = Signer.from_pkcs12(path, getpass.getpass("Contraseña del certificado (no se muestra): "))
+        signer = Signer.from_pkcs12(path, password)
     except SigningError as exc:
         print(exc)
         return 2
@@ -78,13 +81,16 @@ def _cert_info(path: Path) -> int:
     print(f"Titular    : {i.subject}")
     print(f"Vigencia   : {i.not_before:%d/%m/%Y} al {i.not_after:%d/%m/%Y}")
     print("Comparar la serie con SOL > Registro y mantenimiento de certificados digitales.")
+    if legacy_out:
+        legacy_out.write_bytes(signer.export_legacy(password))
+        print(f"Reexportado con cifrado clásico (misma contraseña): {legacy_out}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "certificado":
-        return _cert_info(args.archivo)
+        return _cert_info(args.archivo, args.legacy)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     s = load_settings(args.env)

@@ -93,3 +93,12 @@ def test_pipeline_con_firma_propia(settings, db, fake, tmp_path):
 def test_firma_propia_sin_certificado_no_arranca(settings, db):
     with pytest.raises(SigningError, match="CERT_PATH"):
         Pipeline(settings.model_copy(update={"sovos_signing_mode": "propio"}), db, None)
+
+
+def test_reexportar_con_cifrado_clasico(tmp_path):
+    pfx, cert = make_pfx(tmp_path)
+    signer = Signer.from_pkcs12(pfx, "clave")
+    legacy = tmp_path / "legacy.pfx"
+    legacy.write_bytes(signer.export_legacy("clave"))
+    again = Signer.from_pkcs12(legacy, "clave")
+    assert again.info.serial_hex == signer.info.serial_hex
