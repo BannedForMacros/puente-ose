@@ -37,12 +37,15 @@ from sovos_bridge.service.operations import REPORT_COLUMNS, RETRYABLE, retry_err
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.sovos import SovosClient, SovosError, parse_notifications
 from sovos_bridge.storage import PENDIENTES, Database, Estado
+from sovos_bridge.web import upload
 
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).with_name("static")
 STATIC_FILES = {"app.css", "app.js", "favicon.svg"}
 ACTION_HEADER = "X-Sovos-Panel"
+MAX_BODY = 64_000
+MAX_UPLOAD_BODY = 30 * 1024 * 1024
 HEARTBEAT_STALE_SECONDS = 120
 FILE_KINDS = {"txt": "archivo", "xml": "xml_path", "pdf": "pdf_path", "sbd": "sbd_path"}
 _DOC_ROUTE = re.compile(r"^/api/documents/([^/]+)(?:/(retry|consultar|archivo/(txt|xml|pdf|sbd)))?$")
@@ -172,6 +175,23 @@ class PanelApp:
         hechas = [a for a in acciones if "OMITIDO" not in a]
         return {"reintentados": len(hechas), "omitidos": len(acciones) - len(hechas), "detalle": acciones}
 
+    def upload(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Carga masiva: modo "revisar" no toca nada; "encolar" deja los válidos en la bandeja."""
+        archivos = body.get("archivos")
+        if not isinstance(archivos, list) or not archivos:
+            raise PanelError(HTTPStatus.BAD_REQUEST, "No se recibieron archivos")
+        try:
+            if body.get("modo") == "encolar":
+                checks = upload.enqueue(self.s, self.db, archivos)
+                log.info("Panel: carga masiva, %d de %d archivos encolados",
+                         sum(c.encolable for c in checks), len(checks))
+            else:
+                checks = upload.check_files(self.s, self.db, archivos)
+        except ValueError as exc:
+            raise PanelError(HTTPStatus.BAD_REQUEST, str(exc)) from None
+        return {"archivos": upload.as_dicts(checks),
+                "encolables": sum(c.encolable for c in checks)}
+
     def consult(self, clave: str) -> dict[str, Any]:
         """Consulta a Sovos ahora. Si está pendiente, actualiza el estado como lo haría el servicio."""
         row = self._row(clave)
@@ -278,6 +298,8 @@ def make_handler(app: PanelApp, user: str, password: str):
                 name = f"comprobantes_{date.today().isoformat()}.csv"
                 return self._send(HTTPStatus.OK, app.export_csv(params), "text/csv; charset=utf-8",
                                   {"Content-Disposition": f'attachment; filename="{name}"'})
+            if method == "POST" and path == "/api/upload":
+                return self._json(app.upload(self._body(MAX_UPLOAD_BODY)))
             if method == "POST" and path == "/api/retry-errors":
                 body = self._body()
                 return self._json(app.retry_all(bool(body.get("forzar")), bool(body.get("todos"))))
@@ -303,8 +325,11 @@ def make_handler(app: PanelApp, user: str, password: str):
             header = self.headers.get("Authorization", "")
             return header.startswith("Basic ") and hmac.compare_digest(header[6:].strip(), expected)
 
-        def _body(self) -> dict[str, Any]:
-            length = _int(self.headers.get("Content-Length"), 0, 0, 64_000)
+        def _body(self, max_bytes: int = MAX_BODY) -> dict[str, Any]:
+            length = _int(self.headers.get("Content-Length"), 0, 0, 1 << 31)
+            if length > max_bytes:
+                raise PanelError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                                 f"La carga supera {max_bytes // (1024 * 1024) or 1} MB; súbela en partes")
             if not length:
                 return {}
             try:

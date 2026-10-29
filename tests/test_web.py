@@ -183,3 +183,67 @@ def test_con_clave_exige_autenticacion(settings, db):
 def test_no_se_expone_en_la_red_sin_clave(settings, db):
     s = settings.model_copy(update={"ui_port": 0, "ui_host": "0.0.0.0"})
     assert start_panel(PanelApp(s, db, None)) is None
+
+
+# --- carga masiva -------------------------------------------------------------
+def b64(path_or_bytes):
+    import base64 as _b
+    data = path_or_bytes if isinstance(path_or_bytes, bytes) else path_or_bytes.read_bytes()
+    return _b.b64encode(data).decode()
+
+
+def archivo(nombre, contenido):
+    return {"nombre": nombre, "contenido": b64(contenido)}
+
+
+def test_carga_revisa_sin_tocar_la_bandeja(settings, db):
+    app = PanelApp(settings, db, None)
+    r = app.upload({"modo": "revisar", "archivos": [
+        archivo("100-175-20437310841-300-" + BOLETA_TXT.name, BOLETA_TXT),
+        archivo("20437310841-03-BT05-00000009.txt", b"IDE|basura"),
+        archivo("factura.txt", BOLETA_TXT),
+    ]})
+    res = {a["nombre"]: a for a in r["archivos"]}
+    ok = res["100-175-20437310841-300-" + BOLETA_TXT.name]
+    assert ok["encolable"] and ok["nombre_final"] == BOLETA_TXT.name and ok["cliente_doc"].startswith("****")
+    assert ok["resultado"] == "advertencia" and "días" in ok["mensajes"][1]     # emitida hace más de 3 días
+    assert res["20437310841-03-BT05-00000009.txt"]["resultado"] == "error"
+    assert res["factura.txt"]["resultado"] == "error"
+    assert r["encolables"] == 1 and not list(settings.inbox_dir.glob("*"))
+
+
+def test_carga_no_reencola_lo_que_sovos_ya_tiene(settings, db, fake):
+    enviar(settings, db, fake)
+    db.set_state(K, Estado.APROBADO, "ok")
+    r = PanelApp(settings, db, None).upload({"modo": "revisar", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]})
+    assert r["archivos"][0]["resultado"] == "ya_enviado" and r["encolables"] == 0
+
+
+def test_carga_rechazado_se_puede_reenviar(settings, db, fake):
+    rechazar(settings, db, fake)
+    a = PanelApp(settings, db, None).upload({"modo": "revisar", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]})
+    assert a["archivos"][0]["encolable"] and a["archivos"][0]["reenvio"]
+
+
+def test_carga_encola_solo_los_validos_y_detecta_repetidos(settings, db):
+    app = PanelApp(settings, db, None)
+    r = app.upload({"modo": "encolar", "archivos": [
+        archivo(BOLETA_TXT.name, BOLETA_TXT),
+        archivo("copia-" + BOLETA_TXT.name, BOLETA_TXT),
+        archivo("20437310841-03-BT05-00000009.txt", b"IDE|basura"),
+    ]})
+    assert r["encolables"] == 1
+    assert [p.name for p in settings.inbox_dir.iterdir()] == [BOLETA_TXT.name]
+    assert (settings.inbox_dir / BOLETA_TXT.name).read_bytes() == BOLETA_TXT.read_bytes()
+    # Si ya está esperando en la bandeja, no se duplica.
+    again = app.upload({"modo": "revisar", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]})
+    assert again["archivos"][0]["resultado"] == "en_cola"
+
+
+def test_carga_por_http(server):
+    http, _ = server
+    body = {"modo": "revisar", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]}
+    assert http.post("/api/upload", json=body).status_code == 403
+    r = http.post("/api/upload", json=body, headers={"X-Sovos-Panel": "1"})
+    assert r.status_code == 200 and r.json()["encolables"] == 1
+    assert http.post("/api/upload", json={"archivos": []}, headers={"X-Sovos-Panel": "1"}).status_code == 400

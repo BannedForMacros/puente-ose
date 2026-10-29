@@ -136,6 +136,12 @@ consultar a Sovos en el momento, descargar TXT/SBD/XML/PDF y reintentar
 errores con las mismas reglas que `retry-errors` (nunca reenvía algo que
 Sovos ya tiene; un envío incierto exige confirmación explícita).
 
+**Subir TXT** permite cargar muchos archivos a la vez: primero se revisan
+(nombre, contenido, si Sovos ya los tiene, si ya están en la bandeja y días
+desde la emisión) sin enviar nada; luego se dejan en la bandeja solo los que
+se marquen. Acepta nombres con prefijo (`100-175-...-300-RUC-tipo-serie-número.txt`)
+y los guarda con el nombre estándar.
+
 Por defecto solo responde en el propio servidor. Para abrirlo desde otras PC
 de la red: `UI_HOST=0.0.0.0` y `UI_PASSWORD=<clave>` en el `.env` (sin clave
 no arranca, porque muestra datos de pacientes), y abrir el puerto `UI_PORT`

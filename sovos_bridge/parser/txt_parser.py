@@ -13,7 +13,9 @@ from sovos_bridge.parser.tokenizer import decode_bytes, pairs, split_fields, spl
 
 log = logging.getLogger(__name__)
 
-_FILE_CPE = re.compile(r"^(\d{11})-(\d{2})-([A-Z0-9]{4})-(\d{1,8})\.txt$", re.IGNORECASE)
+# Admite un prefijo antes del nombre estándar: el sistema Java también genera
+# nombres como 100-175-20437310841-300-20437310841-07-FC01-00000050.txt.
+_FILE_CPE = re.compile(r"^(?:.*-)?(\d{11})-(\d{2})-([A-Z0-9]{4})-(\d{1,8})\.txt$", re.IGNORECASE)
 _FILE_BAJA = re.compile(r"^(\d{11})-(RA|RC|RR)-(\d{8})-(\d{1,5})\.txt$", re.IGNORECASE)
 _ZERO = re.compile(r"^0+(\.0+)?$")
 
@@ -32,6 +34,11 @@ class FileInfo:
     @property
     def clave(self) -> str:
         return f"{self.ruc}-{self.tipo}-{self.serie_numero}"
+
+
+def standard_name(info: FileInfo) -> str:
+    """Nombre estándar RUC-tipo-serie-número.txt (sin prefijos)."""
+    return f"{info.clave}.txt"
 
 
 def parse_filename(name: str) -> FileInfo:

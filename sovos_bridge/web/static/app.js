@@ -552,6 +552,171 @@ async function retryAll(btn) {
   finally { busy(btn, false); }
 }
 
+// --- carga masiva de TXT ---------------------------------------------------
+const UPLOAD_CHUNK = 200;
+const RESULTADOS = {
+  error:       { label: "Con error",        tone: "bad",  order: 0 },
+  advertencia: { label: "Listo, con aviso", tone: "warn", order: 1 },
+  valido:      { label: "Listo",            tone: "ok",   order: 2 },
+  ya_enviado:  { label: "Ya enviado",       tone: "idle", order: 3 },
+  en_cola:     { label: "Ya en la bandeja", tone: "idle", order: 4 },
+};
+const upload = { files: [], results: [], done: false, sent: new Set() };
+
+function pill(label, tone) { return `<span class="badge" data-tone="${tone}">${esc(label)}</span>`; }
+
+function openUpload() {
+  resetUpload();
+  const layer = $("upload");
+  layer.hidden = false;
+  requestAnimationFrame(() => layer.classList.add("is-open"));
+  $("upload-input").focus();
+}
+function closeUpload() {
+  const layer = $("upload");
+  layer.classList.remove("is-open");
+  setTimeout(() => { layer.hidden = true; }, 160);
+  $("open-upload").focus();
+}
+function resetUpload() {
+  upload.files = []; upload.results = []; upload.done = false; upload.sent = new Set();
+  $("upload-input").value = "";
+  $("dropzone").hidden = false;
+  $("dropzone").classList.remove("is-busy");
+  $("upload-results").hidden = true;
+  $("upload-reset").hidden = true;
+  $("upload-send").disabled = true;
+  $("upload-send").textContent = "Enviar a la bandeja";
+  $("upload-sub").textContent = "Se revisan antes de enviar: nada sale a Sovos hasta que confirmes.";
+  serviceNote();
+}
+function serviceNote() {
+  const note = $("upload-note");
+  const s = state.summary;
+  if (s && !s.servicio.activo) {
+    note.dataset.tone = "warn";
+    note.textContent = "El servicio de envío está detenido: los archivos esperarán en la bandeja hasta que se inicie.";
+  } else {
+    note.dataset.tone = "";
+    note.textContent = s ? `Al confirmar, el servicio los envía a Sovos (${s.ambiente}).` : "";
+  }
+}
+
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",", 2)[1] || "");
+    r.onerror = () => reject(new Error(`No se pudo leer ${file.name}`));
+    r.readAsDataURL(file);
+  });
+}
+
+async function postChunks(modo, files) {
+  const out = [];
+  for (let i = 0; i < files.length; i += UPLOAD_CHUNK) {
+    const r = await api("/api/upload", { method: "POST", body: { modo, archivos: files.slice(i, i + UPLOAD_CHUNK) } });
+    out.push(...r.archivos);
+  }
+  return out;
+}
+
+async function handleFiles(list) {
+  const picked = [...list].filter((f) => /\.txt$/i.test(f.name));
+  const skipped = list.length - picked.length;
+  if (!picked.length) { toast("Elige archivos .txt del sistema de facturación", "warn"); return; }
+  const dz = $("dropzone");
+  dz.classList.add("is-busy");
+  $("upload-sub").textContent = `Revisando ${picked.length} archivo${picked.length === 1 ? "" : "s"}…`;
+  try {
+    upload.files = await Promise.all(picked.map(async (f) => ({ nombre: f.name, contenido: await readAsBase64(f) })));
+    upload.results = await postChunks("revisar", upload.files);
+    dz.hidden = true;
+    renderUpload();
+    if (skipped) toast(`${skipped} archivo${skipped === 1 ? "" : "s"} sin extensión .txt no se incluyeron`, "warn");
+  } catch (err) {
+    toast(err.message, "bad");
+    resetUpload();
+  } finally { dz.classList.remove("is-busy"); }
+}
+
+function renderUpload() {
+  const res = [...upload.results].sort((a, b) => RESULTADOS[a.resultado].order - RESULTADOS[b.resultado].order);
+  upload.results = res;
+  const counts = {};
+  res.forEach((r) => { counts[r.resultado] = (counts[r.resultado] || 0) + 1; });
+  const queued = upload.done ? res.filter((r) => r.encolable && upload.sent.has(r.nombre)).length : 0;
+  $("upload-summary").innerHTML = (upload.done ? pill(`Dejados en la bandeja: ${queued}`, "info") : "")
+    + Object.keys(RESULTADOS).filter((k) => counts[k])
+      .map((k) => pill(`${RESULTADOS[k].label}: ${counts[k]}`, RESULTADOS[k].tone)).join("");
+  $("upload-rows").innerHTML = res.map((r, i) => {
+    const meta = RESULTADOS[r.resultado];
+    const check = r.encolable && !upload.done
+      ? `<input class="row-check" type="checkbox" data-upload="${i}" checked aria-label="Incluir ${esc(r.nombre)}">` : "";
+    const emision = r.fecha_emision
+      ? `${fmtDate(r.fecha_emision)}${r.dias_desde_emision > 0 ? `<span class="file-sub">hace ${r.dias_desde_emision} días</span>` : ""}` : "—";
+    return `<tr>
+      <td>${check}</td>
+      <td><span class="file-name">${esc(r.serie_numero || r.nombre)}</span><span class="file-sub">${esc(r.serie_numero ? `${tipoLabel(r.tipo)}, ${r.nombre}` : "")}</span></td>
+      <td class="tnum">${emision}</td>
+      <td class="num">${r.importe_total ? fmtMoney(r.importe_total, r.moneda) : "—"}</td>
+      <td>${pill(meta.label, meta.tone)}</td>
+      <td><ul class="msgs">${(r.mensajes || []).map((m) => `<li>${esc(m)}</li>`).join("") || "<li>Sin observaciones</li>"}</ul></td>
+    </tr>`;
+  }).join("");
+  $("upload-results").hidden = false;
+  $("upload-reset").hidden = false;
+  $("upload-sub").textContent = upload.done
+    ? "Resultado de la carga."
+    : "Revisa el resultado. Desmarca los que no quieras enviar todavía.";
+  syncUploadButton();
+}
+
+function selectedUploads() {
+  return [...document.querySelectorAll("[data-upload]:checked")].map((c) => upload.results[Number(c.dataset.upload)]);
+}
+function syncUploadButton() {
+  const btn = $("upload-send");
+  if (upload.done) { btn.disabled = false; btn.textContent = "Cerrar"; return; }
+  const n = selectedUploads().length;
+  btn.disabled = n === 0;
+  btn.textContent = n ? `Enviar ${n} a la bandeja` : "Nada para enviar";
+}
+
+async function sendUploads(btn) {
+  if (upload.done) { closeUpload(); return; }
+  const chosen = new Set(selectedUploads().map((r) => r.nombre));
+  const files = upload.files.filter((f) => chosen.has(f.nombre));
+  if (!files.length) return;
+  busy(btn, true);
+  try {
+    const res = await postChunks("encolar", files);
+    const ok = res.filter((r) => r.encolable).length;
+    const byName = new Map(res.map((r) => [r.nombre, r]));
+    upload.results = upload.results.map((r) => byName.get(r.nombre) || r);
+    upload.done = true;
+    upload.sent = chosen;
+    renderUpload();
+    toast(ok === files.length ? `${ok} dejado${ok === 1 ? "" : "s"} en la bandeja` : `${ok} de ${files.length} dejados en la bandeja; revisa el detalle`, ok === files.length ? "ok" : "warn");
+    loadSummary(); loadRows({ silent: true });
+  } catch (err) {
+    toast(err.message, "bad");
+  } finally { busy(btn, false); syncUploadButton(); }
+}
+
+function bindUpload() {
+  const dz = $("dropzone");
+  $("open-upload").addEventListener("click", openUpload);
+  $("upload-close").addEventListener("click", closeUpload);
+  $("upload-reset").addEventListener("click", resetUpload);
+  $("upload-send").addEventListener("click", (e) => sendUploads(e.currentTarget));
+  $("upload-input").addEventListener("change", (e) => handleFiles(e.target.files));
+  $("upload-rows").addEventListener("change", (e) => { if (e.target.matches("[data-upload]")) syncUploadButton(); });
+  ["dragenter", "dragover"].forEach((t) => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.add("is-over"); }));
+  ["dragleave", "drop"].forEach((t) => dz.addEventListener(t, () => dz.classList.remove("is-over")));
+  dz.addEventListener("drop", (e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); });
+  $("upload").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeUpload(); } });
+}
+
 // --- eventos ----------------------------------------------------------------
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
@@ -598,7 +763,7 @@ function bind() {
     if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showDetail(row.dataset.clave); }
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && state.openClave && $("modal").hidden) closeDrawer();
+    if (e.key === "Escape" && state.openClave && $("modal").hidden && $("upload").hidden) closeDrawer();
     if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("q").focus(); }
   });
 }
@@ -612,7 +777,7 @@ function clearFilters() {
 // --- arranque ---------------------------------------------------------------
 function refreshLoop() {
   setInterval(() => {
-    if (document.hidden || !$("modal").hidden) return;
+    if (document.hidden || !$("modal").hidden || !$("upload").hidden) return;
     loadSummary();
     loadRows({ silent: true });
     if (state.openClave) showDetail(state.openClave);
@@ -621,6 +786,7 @@ function refreshLoop() {
 }
 
 bind();
+bindUpload();
 syncSortHeaders();
 loadSummary();
 loadRows();

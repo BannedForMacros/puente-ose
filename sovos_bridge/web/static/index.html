@@ -29,7 +29,10 @@
         <span class="service-dot" aria-hidden="true"></span><span id="service-text">Conectando…</span>
       </span>
     </div>
-    <button class="btn btn-primary" id="retry-all" type="button">Reintentar errores</button>
+    <div class="topbar-actions">
+      <button class="btn btn-secondary" id="open-upload" type="button">Subir TXT</button>
+      <button class="btn btn-primary" id="retry-all" type="button">Reintentar errores</button>
+    </div>
   </header>
 
   <main class="page">
@@ -128,6 +131,54 @@
         <button class="btn btn-ghost" id="modal-cancel" type="button">Cancelar</button>
         <button class="btn btn-primary" id="modal-ok" type="button"></button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="upload" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="upload-title">
+      <header class="upload-head">
+        <div>
+          <h2 id="upload-title">Subir TXT</h2>
+          <p class="upload-sub" id="upload-sub">Se revisan antes de enviar: nada sale a Sovos hasta que confirmes.</p>
+        </div>
+        <button class="icon-btn" id="upload-close" type="button" aria-label="Cerrar">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
+        </button>
+      </header>
+
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="upload-input" accept=".txt,text/plain" multiple>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        <span class="dropzone-title">Arrastra aquí los TXT del sistema de facturación</span>
+        <span class="dropzone-hint">o haz clic para elegirlos. Hasta 500 por vez; también acepta nombres con prefijo.</span>
+      </label>
+
+      <div class="upload-results" id="upload-results" hidden>
+        <div class="upload-summary" id="upload-summary"></div>
+        <div class="upload-table-wrap">
+          <table class="grid grid-compact">
+            <thead>
+              <tr>
+                <th scope="col"><span class="sr-only">Incluir</span></th>
+                <th scope="col">Archivo</th>
+                <th scope="col">Emisión</th>
+                <th scope="col" class="num">Total</th>
+                <th scope="col">Resultado</th>
+                <th scope="col">Detalle</th>
+              </tr>
+            </thead>
+            <tbody id="upload-rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <footer class="upload-foot">
+        <p class="upload-note" id="upload-note"></p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="upload-reset" type="button" hidden>Elegir otros</button>
+          <button class="btn btn-primary" id="upload-send" type="button" disabled>Enviar a la bandeja</button>
+        </div>
+      </footer>
     </div>
   </div>
 

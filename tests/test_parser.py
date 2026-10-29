@@ -101,3 +101,8 @@ def test_campo_desconocido_con_valor_genera_advertencia():
     txt = BOLETA_TXT.read_text(encoding="utf-8").replace("|PEN||2026-10-22|", "|PEN|OC-555|2026-10-22|")
     d = parse_text(txt, parse_filename(BOLETA_TXT.name))
     assert any("IDE posición 6" in w for w in d.advertencias)
+
+
+def test_nombre_con_prefijo_del_sistema_java():
+    info = parse_filename("100-175-20437310841-300-20437310841-07-FC01-00000050.txt")
+    assert (info.ruc, info.tipo, info.serie_numero) == ("20437310841", "07", "FC01-00000050")
