@@ -40,6 +40,13 @@ class Settings(BaseModel):
     log_level: str = "INFO"
     log_retention_days: int = 90
 
+    # Panel web. Fuera de 127.0.0.1 exige UI_PASSWORD (muestra datos de pacientes).
+    ui_enabled: bool = True
+    ui_host: str = "127.0.0.1"
+    ui_port: int = Field(8765, ge=1, le=65535)
+    ui_user: str = "admin"
+    ui_password: SecretStr = SecretStr("")
+
     @field_validator("sovos_base_url")
     @classmethod
     def _strip_slash(cls, v: str) -> str:

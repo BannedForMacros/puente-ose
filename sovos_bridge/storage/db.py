@@ -32,6 +32,9 @@ class Estado(StrEnum):
 
 PENDIENTES = (Estado.ENVIADO, Estado.EN_PROCESO)
 
+# Columnas por las que el panel web puede ordenar (nunca se interpola texto del usuario).
+SORTABLE = ("serie_numero", "fecha_emision", "importe_total", "estado", "actualizado_en", "creado_en", "tipo")
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS documentos (
     clave              TEXT PRIMARY KEY,          -- RUC-tipo-serie-número
@@ -244,6 +247,46 @@ class Database:
     def events(self, clave: str) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute("SELECT * FROM eventos WHERE clave=? ORDER BY id", (clave,)).fetchall()
+
+    def search(self, *, q: str = "", estados: tuple[str, ...] = (), tipo: str = "", desde: str = "",
+               hasta: str = "", sort: str = "actualizado_en", desc: bool = True, page: int = 1,
+               per_page: int = 25) -> tuple[list[sqlite3.Row], int]:
+        """Búsqueda paginada para el panel web. `sort` solo acepta columnas de SORTABLE."""
+        where, params = ["1=1"], []
+        if q:
+            like = f"%{q.strip().upper()}%"
+            where.append("(UPPER(clave) LIKE ? OR UPPER(serie_numero) LIKE ? OR UPPER(IFNULL(mensaje,'')) LIKE ?"
+                         " OR IFNULL(document_id,'') LIKE ? OR IFNULL(cliente_doc,'') LIKE ?)")
+            params += [like, like, like, f"%{q.strip()}%", f"%{q.strip()}%"]
+        if estados:
+            where.append(f"estado IN ({','.join('?' * len(estados))})")
+            params += list(estados)
+        if tipo:
+            where.append("tipo=?")
+            params.append(tipo)
+        if desde:
+            where.append("fecha_emision>=?")
+            params.append(desde)
+        if hasta:
+            where.append("fecha_emision<=?")
+            params.append(hasta)
+        col = sort if sort in SORTABLE else "actualizado_en"
+        if col == "importe_total":
+            col = "CAST(importe_total AS REAL)"   # se guarda como texto
+        order = f"{col} {'DESC' if desc else 'ASC'}, clave"
+        sql_where = " AND ".join(where)
+        with self._lock:
+            total = self._conn.execute(f"SELECT COUNT(*) FROM documentos WHERE {sql_where}", params).fetchone()[0]
+            rows = self._conn.execute(
+                f"SELECT * FROM documentos WHERE {sql_where} ORDER BY {order} LIMIT ? OFFSET ?",
+                (*params, per_page, max(page - 1, 0) * per_page),
+            ).fetchall()
+        return rows, total
+
+    def state_counts(self) -> dict[str, int]:
+        with self._lock:
+            rows = self._conn.execute("SELECT estado, COUNT(*) FROM documentos GROUP BY estado").fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def day_rows(self, day: str) -> list[sqlite3.Row]:
         """Comprobantes recibidos o actualizados el día AAAA-MM-DD."""

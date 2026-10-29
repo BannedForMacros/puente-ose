@@ -42,41 +42,45 @@ def status_text(db: Database, serie_numero: str) -> str:
     return "\n".join(out)
 
 
-def retry_errors(s: Settings, db: Database, *, forzar: bool = False, todos: bool = False) -> list[str]:
-    """Reintenta errores.
+RETRYABLE = (Estado.ERROR_CONEXION, Estado.VALIDACION_ERROR, Estado.RECHAZADO)
+
+
+def retry_one(s: Settings, db: Database, row, *, forzar: bool = False) -> tuple[bool, str]:
+    """Reintenta un comprobante. Devuelve (se hizo algo, descripción).
 
     - ERROR_CONEXION con documentId (Sovos lo tiene): vuelve a consultar estado, NO reenvía.
-    - ERROR_CONEXION sin documentId: devuelve el TXT a la bandeja para reenviar.
-    - Envío incierto: solo con --forzar (tras verificar en el portal que Sovos no lo tiene).
-    - VALIDACION_ERROR y RECHAZADO: solo con --todos (tras corregir el TXT en error/).
+    - Envío incierto: solo con `forzar` (tras verificar en el portal que Sovos no lo tiene).
+    - Resto (ERROR_CONEXION sin documentId, VALIDACION_ERROR, RECHAZADO): el TXT vuelve a la bandeja.
     """
-    acciones: list[str] = []
+    clave = row["clave"]
+    if row["estado"] not in RETRYABLE:
+        return False, f"{clave}: OMITIDO, el estado {row['estado']} no se reintenta"
+    txt = Path(row["archivo"] or "")
+    if row["estado"] == Estado.ERROR_CONEXION and row["document_id"]:
+        dest = None
+        if txt.exists():
+            files.remove_error_log(txt)
+            dest = files.move(txt, s.processing_dir)
+        db.set_state(clave, Estado.EN_PROCESO, "retry-errors: se reanuda la consulta de estado")
+        db.update_fields(clave, enviado_en=now_iso(), **({"archivo": str(dest)} if dest else {}))
+        return True, f"{clave}: se reanuda la consulta de estado (documentId {row['document_id']})"
+    if row["envio_incierto"] and not forzar:
+        return False, f"{clave}: OMITIDO, envío incierto. Verificar en Sovos y usar --forzar si no existe"
+    if not txt.exists():
+        return False, f"{clave}: OMITIDO, no se encontró el TXT {txt}"
+    if row["envio_incierto"]:
+        db.update_fields(clave, envio_incierto=0, envio_iniciado_en=None)
+        db.add_event(clave, "retry-errors --forzar: se libera el envío incierto (verificado por TI)")
+    files.remove_error_log(txt)
+    dest = files.move(txt, s.inbox_dir)
+    db.update_fields(clave, archivo=str(dest))
+    return True, f"{clave}: devuelto a la bandeja para reenvío ({row['estado']})"
+
+
+def retry_errors(s: Settings, db: Database, *, forzar: bool = False, todos: bool = False) -> list[str]:
+    """Reintenta errores de conexión; con `todos`, también VALIDACION_ERROR y RECHAZADO ya corregidos."""
     estados = [Estado.ERROR_CONEXION] + ([Estado.VALIDACION_ERROR, Estado.RECHAZADO] if todos else [])
-    for row in db.by_states(*estados):
-        clave = row["clave"]
-        txt = Path(row["archivo"] or "")
-        if row["estado"] == Estado.ERROR_CONEXION and row["document_id"]:
-            dest = None
-            if txt.exists():
-                files.remove_error_log(txt)
-                dest = files.move(txt, s.processing_dir)
-            db.set_state(clave, Estado.EN_PROCESO, "retry-errors: se reanuda la consulta de estado")
-            db.update_fields(clave, enviado_en=now_iso(), **({"archivo": str(dest)} if dest else {}))
-            acciones.append(f"{clave}: se reanuda la consulta de estado (documentId {row['document_id']})")
-            continue
-        if row["envio_incierto"] and not forzar:
-            acciones.append(f"{clave}: OMITIDO, envío incierto. Verificar en Sovos y usar --forzar si no existe")
-            continue
-        if not txt.exists():
-            acciones.append(f"{clave}: OMITIDO, no se encontró el TXT {txt}")
-            continue
-        if row["envio_incierto"]:
-            db.update_fields(clave, envio_incierto=0, envio_iniciado_en=None)
-            db.add_event(clave, "retry-errors --forzar: se libera el envío incierto (verificado por TI)")
-        files.remove_error_log(txt)
-        dest = files.move(txt, s.inbox_dir)
-        db.update_fields(clave, archivo=str(dest))
-        acciones.append(f"{clave}: devuelto a la bandeja para reenvío ({row['estado']})")
+    acciones = [retry_one(s, db, row, forzar=forzar)[1] for row in db.by_states(*estados)]
     for a in acciones:
         log.info("retry-errors: %s", a)
     return acciones

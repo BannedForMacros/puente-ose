@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Puente Sovos</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="7" cy="20" r="4"/><circle cx="25" cy="20" r="4"/>
+        <path d="M7 20c3-9 15-9 18 0" fill="none" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <h1>Puente Sovos</h1>
+        <p class="brand-sub" id="org">Facturación electrónica</p>
+      </div>
+    </div>
+    <div class="topbar-status">
+      <span class="env" id="env" hidden></span>
+      <span class="service" id="service" role="status" aria-live="polite">
+        <span class="service-dot" aria-hidden="true"></span><span id="service-text">Conectando…</span>
+      </span>
+    </div>
+    <button class="btn btn-primary" id="retry-all" type="button">Reintentar errores</button>
+  </header>
+
+  <main class="page">
+    <section class="flow" aria-label="Recorrido de los comprobantes">
+      <ol class="flow-track" id="flow-track"></ol>
+      <div class="flow-attention" id="flow-attention" aria-label="Requieren atención"></div>
+    </section>
+
+    <section class="panel" aria-label="Comprobantes">
+      <div class="toolbar">
+        <label class="search">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
+          <span class="sr-only">Buscar</span>
+          <input id="q" type="search" placeholder="Buscar serie, documentId, cliente o mensaje" autocomplete="off">
+        </label>
+        <label class="field">
+          <span class="field-label">Tipo</span>
+          <select id="tipo">
+            <option value="">Todos</option>
+            <option value="03">Boleta</option>
+            <option value="01">Factura</option>
+            <option value="07">Nota de crédito</option>
+            <option value="08">Nota de débito</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Emitidos desde</span>
+          <input id="desde" type="date">
+        </label>
+        <label class="field">
+          <span class="field-label">hasta</span>
+          <input id="hasta" type="date">
+        </label>
+        <button class="btn btn-ghost" id="clear" type="button" hidden>Limpiar filtros</button>
+        <div class="toolbar-end">
+          <span class="refreshed" id="refreshed" aria-live="polite"></span>
+          <a class="btn btn-secondary" id="export" href="/api/export.csv" download>Exportar CSV</a>
+        </div>
+      </div>
+
+      <div class="table-wrap" id="table-wrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th scope="col"><button class="sort" data-sort="serie_numero">Comprobante</button></th>
+              <th scope="col"><button class="sort" data-sort="fecha_emision">Emisión</button></th>
+              <th scope="col">Cliente</th>
+              <th scope="col" class="num"><button class="sort" data-sort="importe_total">Total</button></th>
+              <th scope="col"><button class="sort" data-sort="estado">Estado</button></th>
+              <th scope="col">Respuesta</th>
+              <th scope="col"><button class="sort" data-sort="actualizado_en">Actualizado</button></th>
+              <th scope="col"><span class="sr-only">Acciones</span></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="state" id="state" hidden></div>
+      </div>
+
+      <footer class="pager">
+        <span id="range"></span>
+        <label class="field field-inline">
+          <span class="field-label">Por página</span>
+          <select id="per-page"><option>25</option><option>50</option><option>100</option></select>
+        </label>
+        <div class="pager-buttons">
+          <button class="btn btn-ghost" id="prev" type="button">Anterior</button>
+          <button class="btn btn-ghost" id="next" type="button">Siguiente</button>
+        </div>
+      </footer>
+    </section>
+  </main>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
+    <header class="drawer-head">
+      <div>
+        <h2 id="drawer-title"></h2>
+        <p class="drawer-sub" id="drawer-sub"></p>
+      </div>
+      <button class="icon-btn" id="drawer-close" type="button" aria-label="Cerrar detalle">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
+      </button>
+    </header>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <div class="modal-layer" id="modal" hidden>
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-text">
+      <h2 id="modal-title"></h2>
+      <div id="modal-text" class="modal-text"></div>
+      <label class="check" id="modal-check" hidden>
+        <input type="checkbox" id="modal-check-input"><span id="modal-check-text"></span>
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="modal-cancel" type="button">Cancelar</button>
+        <button class="btn btn-primary" id="modal-ok" type="button"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>

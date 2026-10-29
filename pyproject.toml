@@ -23,5 +23,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["sovos_bridge*"]
 
+[tool.setuptools.package-data]
+"sovos_bridge.web" = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -10,20 +10,31 @@ from sovos_bridge.config import Settings
 from sovos_bridge.service.pipeline import Pipeline
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.service.watcher import InboxWatcher
+from sovos_bridge.web import PanelApp, heartbeat_path, start_panel
 
 log = logging.getLogger(__name__)
 
 
 class Service:
-    def __init__(self, settings: Settings, pipeline: Pipeline, poller: StatusPoller | None):
+    def __init__(self, settings: Settings, pipeline: Pipeline, poller: StatusPoller | None,
+                 panel: PanelApp | None = None):
         self.s = settings
         self.pipeline = pipeline
         self.poller = poller
+        self.panel = panel
         self.watcher = InboxWatcher(settings.inbox_dir, settings.file_stable_seconds)
         self.stop_event = threading.Event()
 
+    def _heartbeat(self) -> None:
+        """El panel web muestra el servicio como activo mientras este archivo se actualice."""
+        try:
+            heartbeat_path(self.s).touch()
+        except OSError:
+            log.debug("No se pudo actualizar el heartbeat", exc_info=True)
+
     def inbox_loop(self) -> None:
         while not self.stop_event.is_set():
+            self._heartbeat()
             try:
                 for path in self.watcher.ready_files():
                     if self.stop_event.is_set():
@@ -65,6 +76,7 @@ class Service:
                 except ValueError:
                     pass  # no se está en el hilo principal (pruebas)
 
+        panel = start_panel(self.panel) if self.panel is not None and self.s.ui_enabled else None
         threads = [threading.Thread(target=self.inbox_loop, name="bandeja", daemon=True)]
         if self.poller is not None:
             threads.append(threading.Thread(target=self.status_loop, name="estados", daemon=True))
@@ -77,4 +89,7 @@ class Service:
             self.stop_event.set()
         for t in threads:
             t.join(timeout=60)
+        if panel is not None:
+            panel[0].shutdown()
+        heartbeat_path(self.s).unlink(missing_ok=True)
         log.info("Servicio detenido")

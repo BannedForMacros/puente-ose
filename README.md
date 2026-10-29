@@ -126,6 +126,20 @@ journalctl -u sovos-bridge -f
 | `python -m sovos_bridge status <serie-número> [--consultar]` | Estado e historial, ej. `status BT05-00125304` |
 | `python -m sovos_bridge retry-errors [--forzar] [--todos]` | Reintenta errores (ver GUIA_OPERACION.md) |
 | `python -m sovos_bridge report --date AAAA-MM-DD` | Resumen del día en CSV |
+| `python -m sovos_bridge ui` | Solo el panel web, sin procesar la bandeja |
+
+## Panel web
+
+El servicio (`run`) levanta también un panel en `http://localhost:8765` para
+ver el estado de cada comprobante en Sovos y SUNAT, revisar su historial,
+consultar a Sovos en el momento, descargar TXT/SBD/XML/PDF y reintentar
+errores con las mismas reglas que `retry-errors` (nunca reenvía algo que
+Sovos ya tiene; un envío incierto exige confirmación explícita).
+
+Por defecto solo responde en el propio servidor. Para abrirlo desde otras PC
+de la red: `UI_HOST=0.0.0.0` y `UI_PASSWORD=<clave>` en el `.env` (sin clave
+no arranca, porque muestra datos de pacientes), y abrir el puerto `UI_PORT`
+en el firewall de Windows solo para la red interna.
 
 Con `--env <ruta>` (antes del comando) se indica un `.env` distinto al de la
 carpeta actual.

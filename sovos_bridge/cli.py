@@ -5,6 +5,7 @@
   python -m sovos_bridge status <serie-numero>   estado de un comprobante
   python -m sovos_bridge retry-errors            reintenta errores de conexión
   python -m sovos_bridge report --date AAAA-MM-DD   resumen del día en CSV
+  python -m sovos_bridge ui                      solo el panel web (sin procesar la bandeja)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from sovos_bridge.service.runner import Service
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.sovos import SovosClient, build_token_provider
 from sovos_bridge.storage import Database
+from sovos_bridge.web import PanelApp, start_panel
 
 log = logging.getLogger("sovos_bridge")
 
@@ -54,6 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     rt.add_argument("--todos", action="store_true", help="incluir VALIDACION_ERROR y RECHAZADO ya corregidos")
     rp = sub.add_parser("report", help="resumen del día en CSV")
     rp.add_argument("--date", default=date.today().isoformat(), help="AAAA-MM-DD (por defecto hoy)")
+    sub.add_parser("ui", help="abrir solo el panel web (estados, reintentos, consulta a Sovos)")
     return p
 
 
@@ -114,7 +117,19 @@ def _dispatch(args, s: Settings, db: Database) -> int:
 
     if args.cmd == "run":
         poller = None if s.dry_run else StatusPoller(s, db, client)
-        Service(s, pipeline, poller).run()
+        Service(s, pipeline, poller, PanelApp(s, db, client, poller)).run()
+        return 0
+
+    if args.cmd == "ui":
+        panel = start_panel(PanelApp(s, db, client))
+        if panel is None:
+            return 2
+        print(f"Panel web en http://{'localhost' if s.ui_host in ('127.0.0.1', 'localhost') else s.ui_host}"
+              f":{panel[0].server_address[1]}  (Ctrl+C para salir)")
+        try:
+            panel[1].join()
+        except KeyboardInterrupt:
+            panel[0].shutdown()
         return 0
     return 2
 
