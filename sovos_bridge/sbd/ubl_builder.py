@@ -72,7 +72,10 @@ def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defect
     name = root_name(doc, note_root)
     ns, prefix = ROOTS[name]
     b = _B(doc.moneda)
-    nsmap = {prefix: ns, "cac": CAC, "cbc": CBC} | ({"ext": EXT} if ubl_extensions else {})
+    # El XML legal (firma propia) usa la raíz sin prefijo, como SUNAT y Sovos: Sovos identifica
+    # el tipo de documento por el nombre literal de la raíz ("Invoice", no "inv:Invoice").
+    nsmap = ({None: ns, "cac": CAC, "cbc": CBC, "ext": EXT} if ubl_extensions
+             else {prefix: ns, "cac": CAC, "cbc": CBC})
     root = etree.Element(f"{{{ns}}}{name}", nsmap=nsmap)
     if ubl_extensions:
         ext = etree.SubElement(etree.SubElement(root, f"{{{EXT}}}UBLExtensions"), f"{{{EXT}}}UBLExtension")

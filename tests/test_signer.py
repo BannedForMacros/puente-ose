@@ -102,3 +102,9 @@ def test_reexportar_con_cifrado_clasico(tmp_path):
     legacy.write_bytes(signer.export_legacy("clave"))
     again = Signer.from_pkcs12(legacy, "clave")
     assert again.info.serial_hex == signer.info.serial_hex
+
+
+def test_xml_legal_con_raiz_sin_prefijo(tmp_path):
+    pfx, _ = make_pfx(tmp_path)
+    signed = Signer.from_pkcs12(pfx, "clave").sign(build_ubl(parse_file(BOLETA_TXT), ubl_extensions=True), "S")
+    assert etree.tostring(signed).startswith(b'<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"')

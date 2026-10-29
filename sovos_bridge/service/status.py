@@ -267,11 +267,16 @@ def _current_attempt(notifs: list[Notification], enviado_en: str | None) -> list
         tx, created = _tx_and_time(n)
         if tx and created is not None:
             inicio[tx] = min(inicio.get(tx, created), created)
+    # De las transacciones iniciadas desde el envío, vale solo la más reciente.
+    recientes = [t for t, ini in inicio.items() if ini >= limite]
+    ultima = max(recientes, key=inicio.get) if recientes else None
     out = []
     for n in notifs:
         tx, created = _tx_and_time(n)
-        ref = inicio.get(tx, created) if tx else created
-        if ref is not None and ref < limite:
+        if tx:
+            if tx != ultima:
+                continue
+        elif created is not None and created < limite:
             continue
         out.append(n)
     return out

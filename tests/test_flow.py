@@ -309,3 +309,22 @@ def test_reintentos_de_sovos_de_un_envio_viejo_no_cuentan(settings, db, fake):
     fake.queue("PUT", "/v1/notifications/PE", httpx.Response(200, json={"success": True}))
     poller.run_once()
     assert db.get(K)["estado"] == Estado.EN_PROCESO
+
+
+def test_solo_cuenta_la_transaccion_mas_reciente(settings, db, fake):
+    """Dos reenvíos seguidos: la transacción anterior (aún dentro del margen) no decide."""
+    pipe, poller = setup(settings, db, fake)
+    fake.queue("POST", "/v1/documents", accepted("doc-123"))
+    pipe.process(drop(settings))
+    enviado = datetime.fromisoformat(db.get(K)["enviado_en"])
+    ms = lambda dt: int(dt.timestamp() * 1000)
+    anterior = notification("a1", "RE", govt="410", cloud="410")
+    anterior.update(createdDate=ms(enviado - timedelta(seconds=60)))
+    anterior["metadata"]["transactionId"] = "tx-anterior"
+    actual = notification("b1", "IP", cloud="101")
+    actual.update(createdDate=ms(enviado))
+    actual["metadata"]["transactionId"] = "tx-actual"
+    fake.queue("GET", "/v1/documents/PE/doc-123/notifications", notifications_response(anterior, actual))
+    fake.queue("PUT", "/v1/notifications/PE", httpx.Response(200, json={"success": True}))
+    poller.run_once()
+    assert db.get(K)["estado"] == Estado.EN_PROCESO
