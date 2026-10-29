@@ -21,13 +21,17 @@ from sovos_bridge.parser.models import Document
 from sovos_bridge.sbd.namespaces import SBD, SCI, SVS
 from sovos_bridge.sbd.ubl_builder import build_ubl
 
-# Tipo -> (Mapping.OutputSchema, Mapping.TransformDocument). Guía Sovos Perú.
+# Tipo -> (Mapping.OutputSchema, MetaSchema, Mapping.TransformDocument).
+# Sovos resuelve el producto contratado como pe_<OutputSchema>_<MetaSchema>_<Version>
+# (ej. pe_invoice_receipt_2.1 para boletas, pe_creditNote__2.1 para NC), según
+# los productos de la organización y la BT05-00125054 aceptada en producción.
 MAPPING = {
-    "01": ("UBLInvoice", "SCI-TO-LEGAL_INVOICE"),
-    "03": ("UBLInvoice", "SCI-TO-LEGAL_INVOICE"),
-    "07": ("UBLCreditNote", "SCI-TO-LEGAL_CREDIT_NOTE"),
-    "08": ("UBLDebitNote", "SCI-TO-LEGAL_DEBIT_NOTE"),
+    "01": ("invoice", "", "SCI-TO-LEGAL_INVOICE"),
+    "03": ("invoice", "receipt", "SCI-TO-LEGAL_INVOICE"),
+    "07": ("creditNote", "", "SCI-TO-LEGAL_CREDIT_NOTE"),
+    "08": ("debitNote", "", "SCI-TO-LEGAL_DEBIT_NOTE"),
 }
+PRODUCT_VERSION = "2.1"
 
 # La guía de Perú indica Standard Invoice-2 y Type Invoice también para notas.
 DOC_STANDARD = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
@@ -65,7 +69,7 @@ def _scope(scope_parent, type_: str, identifier: str) -> None:
 
 
 def build_sbd(doc: Document, opts: SbdOptions = SbdOptions(), now: datetime | None = None) -> etree._Element:
-    output_schema, transform = MAPPING[doc.tipo_comprobante]
+    output_schema, meta_schema, transform = MAPPING[doc.tipo_comprobante]
     now = now or datetime.now(UTC)
 
     root = etree.Element(f"{{{SBD}}}StandardBusinessDocument", nsmap={"sbd": SBD, "svs": SVS, "sci": SCI})
@@ -89,6 +93,7 @@ def build_sbd(doc: Document, opts: SbdOptions = SbdOptions(), now: datetime | No
 
     bs = _e(h, "BusinessScope")
     _scope(bs, "Country", "PE")
+    _scope(bs, "Version", PRODUCT_VERSION)
     _scope(bs, "ProcessType", "Outbound")
     _scope(bs, "CompanyCode", doc.ruc_emisor)
     _scope(bs, "SenderDocumentId", doc.clave)
@@ -96,6 +101,8 @@ def build_sbd(doc: Document, opts: SbdOptions = SbdOptions(), now: datetime | No
     _scope(bs, "BusinessCategory", business_category(doc))
     _scope(bs, "Mapping.OutputSchema", output_schema)
     _scope(bs, "Mapping.TransformDocument", transform)
+    if meta_schema:
+        _scope(bs, "MetaSchema", meta_schema)
     bp = _e(bs, "Scope")
     _e(bp, "Type", "BusinessProcess")
     _e(bp, "InstanceIdentifier", "")

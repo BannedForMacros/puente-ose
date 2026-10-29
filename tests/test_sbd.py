@@ -5,9 +5,9 @@ from lxml import etree
 
 from sovos_bridge.parser import parse_file, parse_filename, parse_text
 from sovos_bridge.sbd import SbdOptions, build_sbd, serialize, validate_sbd
-from sovos_bridge.sbd.namespaces import CRN, DBN, INV, SBD, SCI, SVS
+from sovos_bridge.sbd.namespaces import CAC, CBC, CRN, DBN, INV, SBD, SCI, SVS
 
-from conftest import BOLETA_TXT, FACTURA_TXT, note_text
+from conftest import BOLETA_TXT, FACTURA_TXT, NOTAS_TXT, note_text
 
 NS = {"sbd": SBD, "svs": SVS, "sci": SCI}
 
@@ -41,9 +41,9 @@ def test_boleta_header():
     assert di.findtext("sbd:Type", namespaces=NS) == "Invoice"
     assert di.findtext("sbd:CreationDateAndTime", namespaces=NS) == "2026-10-28T15:00:00Z"
     assert scopes(root) == {
-        "Country": "PE", "ProcessType": "Outbound", "CompanyCode": "20437310841",
+        "Country": "PE", "Version": "2.1", "ProcessType": "Outbound", "CompanyCode": "20437310841",
         "SenderDocumentId": "20437310841-03-BT05-00125304", "SenderSystemId": "DefaultSystemERP",
-        "BusinessCategory": "BusinessToConsumer", "Mapping.OutputSchema": "UBLInvoice",
+        "BusinessCategory": "BusinessToConsumer", "Mapping.OutputSchema": "invoice", "MetaSchema": "receipt",
         "Mapping.TransformDocument": "SCI-TO-LEGAL_INVOICE", "BusinessProcess": "Default",
     }
     assert root.find("svs:SovosDocument/sci:SovosCanonicalInvoice", NS)[0].tag == f"{{{INV}}}Invoice"
@@ -57,9 +57,9 @@ def test_factura_b2b_y_forma_pago():
 
 
 @pytest.mark.parametrize("tipo,serie,raiz,schema,transform,categoria", [
-    ("07", "BC01", CRN, "UBLCreditNote", "SCI-TO-LEGAL_CREDIT_NOTE", "BusinessToConsumer"),
-    ("07", "FC01", CRN, "UBLCreditNote", "SCI-TO-LEGAL_CREDIT_NOTE", "BusinessToBusiness"),
-    ("08", "BD01", DBN, "UBLDebitNote", "SCI-TO-LEGAL_DEBIT_NOTE", "BusinessToConsumer"),
+    ("07", "BC01", CRN, "creditNote", "SCI-TO-LEGAL_CREDIT_NOTE", "BusinessToConsumer"),
+    ("07", "FC01", CRN, "creditNote", "SCI-TO-LEGAL_CREDIT_NOTE", "BusinessToBusiness"),
+    ("08", "BD01", DBN, "debitNote", "SCI-TO-LEGAL_DEBIT_NOTE", "BusinessToConsumer"),
 ])
 def test_notas(tipo, serie, raiz, schema, transform, categoria):
     root = build_sbd(nota(tipo, serie))
@@ -85,3 +85,19 @@ def test_sin_firma_y_bien_formado():
     etree.fromstring(xml)
     assert b"UBLExtensions" not in xml and b"xmldsig" not in xml
     assert "NIÑOS".encode() in xml
+
+
+@pytest.mark.parametrize("path", NOTAS_TXT, ids=lambda p: p.stem)
+def test_notas_reales_validan_xsd(path):
+    doc = parse_file(path)
+    root = build_sbd(doc)
+    validate_sbd(root)
+    sc = scopes(root)
+    assert (sc["Mapping.OutputSchema"], sc["Mapping.TransformDocument"]) == ("creditNote", "SCI-TO-LEGAL_CREDIT_NOTE")
+    assert "MetaSchema" not in sc  # producto pe_creditNote__2.1
+    assert sc["BusinessCategory"] == ("BusinessToBusiness" if doc.serie.startswith("F") else "BusinessToConsumer")
+    cn = root.find("svs:SovosDocument/sci:SovosCanonicalInvoice", NS)[0]
+    assert cn.tag == f"{{{CRN}}}CreditNote"
+    ref = doc.referencia.serie_numero
+    assert cn.findtext(f"{{{CAC}}}DiscrepancyResponse/{{{CBC}}}ReferenceID") == ref
+    assert cn.findtext(f"{{{CAC}}}BillingReference/{{{CAC}}}InvoiceDocumentReference/{{{CBC}}}ID") == ref
