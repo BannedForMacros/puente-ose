@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from lxml import etree
 
 from sovos_bridge.parser.models import Document
-from sovos_bridge.sbd.namespaces import SBD, SCI, SVS
+from sovos_bridge.sbd.namespaces import ENC, SBD, SCI, SVS
 from sovos_bridge.sbd.ubl_builder import build_ubl
 
 # Tipo -> (Mapping.OutputSchema, MetaSchema, Mapping.TransformDocument).
@@ -32,6 +32,14 @@ MAPPING = {
     "08": ("debitNote", "", "SCI-TO-LEGAL_DEBIT_NOTE"),
 }
 PRODUCT_VERSION = "2.1"
+
+# Firma propia: documento legal ya firmado; Sovos solo lo mapea y lo transmite.
+LEGAL_TRANSFORM = {
+    "01": "LEGAL-TO-SCI_INVOICE",
+    "03": "LEGAL-TO-SCI_INVOICE",
+    "07": "LEGAL-TO-SCI_CREDIT_NOTE",   # sin probar aún en producción
+    "08": "LEGAL-TO-SCI_DEBIT_NOTE",    # sin probar aún en producción
+}
 
 # La guía de Perú indica Standard Invoice-2 y Type Invoice también para notas.
 DOC_STANDARD = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
@@ -71,9 +79,41 @@ def _scope(scope_parent, type_: str, identifier: str) -> None:
 
 
 def build_sbd(doc: Document, opts: SbdOptions = SbdOptions(), now: datetime | None = None) -> etree._Element:
+    """SBD con el SCI: Sovos mapea, firma con el certificado configurado en su portal y transmite."""
     output_schema, meta_schema, transform = MAPPING[doc.tipo_comprobante]
-    now = now or datetime.now(UTC)
+    root, bs = _envelope(doc, opts, now, output_schema, meta_schema, transform)
+    _business_process(bs, "Default")
+    sd = etree.SubElement(root, f"{{{SVS}}}SovosDocument")
+    sci = etree.SubElement(sd, f"{{{SCI}}}SovosCanonicalInvoice")
+    sci.append(build_ubl(doc, note_root=opts.note_root, forma_pago_defecto=opts.forma_pago_defecto, sovos_sci=True))
+    return root
 
+
+def build_sbd_signed(doc: Document, signed_xml: bytes, opts: SbdOptions = SbdOptions(),
+                     now: datetime | None = None) -> etree._Element:
+    """SBD con el XML legal ya firmado por el puente: Sovos solo mapea y transmite (no vuelve a firmar)."""
+    output_schema, meta_schema, _ = MAPPING[doc.tipo_comprobante]
+    root, bs = _envelope(doc, opts, now, output_schema, meta_schema, LEGAL_TRANSFORM[doc.tipo_comprobante])
+    _business_process(bs, "Mapping")
+    _business_process(bs, "Transmission")
+    sd = etree.SubElement(root, f"{{{SVS}}}SovosDocument")
+    legal = etree.SubElement(sd, f"{{{SVS}}}SovosLegalDocument")
+    emb = etree.SubElement(etree.SubElement(legal, f"{{{ENC}}}Base64Document", nsmap={"enc": ENC}),
+                           f"{{{ENC}}}EmbeddedDocument", mimeCode="application/xml", fileName=f"{doc.clave}.xml")
+    emb.text = base64.b64encode(signed_xml).decode("ascii")
+    return root
+
+
+def _business_process(bs, service: str) -> None:
+    bp = _e(bs, "Scope")
+    _e(bp, "Type", "BusinessProcess")
+    _e(bp, "InstanceIdentifier", "")
+    _e(_e(bp, "BusinessService"), "BusinessServiceName", service)
+
+
+def _envelope(doc: Document, opts: SbdOptions, now: datetime | None, output_schema: str, meta_schema: str,
+              transform: str):
+    now = now or datetime.now(UTC)
     root = etree.Element(f"{{{SBD}}}StandardBusinessDocument", nsmap={"sbd": SBD, "svs": SVS, "sci": SCI})
     h = _e(root, "StandardBusinessDocumentHeader")
     _e(h, "HeaderVersion", "1.0")
@@ -108,15 +148,7 @@ def build_sbd(doc: Document, opts: SbdOptions = SbdOptions(), now: datetime | No
         _scope(bs, "MetaSchema", meta_schema)
     if opts.sub_schema:
         _scope(bs, "SubSchema", opts.sub_schema)
-    bp = _e(bs, "Scope")
-    _e(bp, "Type", "BusinessProcess")
-    _e(bp, "InstanceIdentifier", "")
-    _e(_e(bp, "BusinessService"), "BusinessServiceName", "Default")
-
-    sd = etree.SubElement(root, f"{{{SVS}}}SovosDocument")
-    sci = etree.SubElement(sd, f"{{{SCI}}}SovosCanonicalInvoice")
-    sci.append(build_ubl(doc, note_root=opts.note_root, forma_pago_defecto=opts.forma_pago_defecto, sovos_sci=True))
-    return root
+    return root, bs
 
 
 def serialize(root: etree._Element) -> bytes:

@@ -9,6 +9,8 @@ CRN = "urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
 DBN = "urn:oasis:names:specification:ubl:schema:xsd:DebitNote-2"
 CAC = "urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
 CBC = "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+EXT = "urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2"
+ENC = "http://www.sovos.com/namespaces/base64Document"
 
 # Raíz UBL -> (namespace, prefijo usado en la documentación de Sovos)
 ROOTS = {

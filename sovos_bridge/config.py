@@ -26,6 +26,11 @@ class Settings(BaseModel):
     sovos_business_category: Literal["auto", "BusinessToBusiness", "BusinessToConsumer"] = "auto"
     # Scope SubSchema: la guía de Sovos lo marca obligatorio ("-" si no aplica); vacío = no se envía
     sovos_sub_schema: str = ""
+    # Firma: sovos = Sovos firma con el certificado de su portal; propio = el puente firma con
+    # el certificado de la clínica registrado en SUNAT y Sovos solo transmite.
+    sovos_signing_mode: Literal["sovos", "propio"] = "sovos"
+    cert_path: Path | None = None
+    cert_password: SecretStr = SecretStr("")
     http_timeout_seconds: float = 60
     http_max_retries: int = Field(5, ge=0)
 

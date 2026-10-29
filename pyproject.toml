@@ -8,10 +8,11 @@ dependencies = [
     "lxml>=5",
     "pydantic>=2.6,<3",
     "python-dotenv>=1",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "signxml>=4,<5"]
 
 [project.scripts]
 sovos-bridge = "sovos_bridge.cli:main"

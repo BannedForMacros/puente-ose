@@ -6,10 +6,15 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from lxml import etree
+
 from sovos_bridge.config import Settings
 from sovos_bridge.logging_setup import mask_doc, register_sensitive
 from sovos_bridge.parser import ParseError, parse_file, parse_filename
-from sovos_bridge.sbd import SbdOptions, SchemaError, build_sbd, serialize, to_base64, validate_sbd
+from sovos_bridge.sbd import (
+    SbdOptions, SchemaError, Signer, SigningError, build_sbd, build_sbd_signed, build_ubl, serialize, to_base64,
+    validate_sbd,
+)
 from sovos_bridge.service import files
 from sovos_bridge.sovos import SovosAuthError, SovosClient, SovosClientError, SovosConnectionError
 from sovos_bridge.storage import Database, Estado
@@ -38,6 +43,14 @@ class Pipeline:
             note_root=settings.sovos_note_root,
             forma_pago_defecto=settings.forma_pago_defecto,
         )
+        self.signer: Signer | None = None
+        if settings.sovos_signing_mode == "propio":
+            if not settings.cert_path:
+                raise SigningError("SOVOS_SIGNING_MODE=propio requiere CERT_PATH (certificado .pfx de la clínica)")
+            self.signer = Signer.from_pkcs12(settings.cert_path, settings.cert_password.get_secret_value())
+            i = self.signer.info
+            log.info("Firma propia activa: certificado serie %s, %s, vence %s", i.serial_hex, i.subject,
+                     f"{i.not_after:%d/%m/%Y}")
 
     # ------------------------------------------------------------------------
     def process(self, src: Path) -> Result:
@@ -110,9 +123,9 @@ class Pipeline:
 
         # --- SBD -------------------------------------------------------------
         try:
-            sbd = build_sbd(doc, self.opts)
+            sbd = self._build(doc, clave)
             validate_sbd(sbd)
-        except SchemaError as exc:
+        except (SchemaError, SigningError) as exc:
             return self._validation_error(clave, work, [str(exc)])
         xml = serialize(sbd)
 
@@ -148,6 +161,19 @@ class Pipeline:
         return Result(Estado.ENVIADO, clave, document_id, work)
 
     # ------------------------------------------------------------------------
+    def _build(self, doc, clave: str):
+        if self.signer is None:
+            return build_sbd(doc, self.opts)
+        # Firma propia: UBL legal (formato aceptado por SUNAT) firmado aquí; Sovos solo lo transmite.
+        ubl = build_ubl(doc, note_root=self.opts.note_root, forma_pago_defecto=self.opts.forma_pago_defecto,
+                        ubl_extensions=True)
+        signed = self.signer.sign(ubl, f"SIGN_{clave}")
+        signed_xml = etree.tostring(signed, xml_declaration=True, encoding="UTF-8")
+        dest = self.s.dry_run_dir if self.s.dry_run else files.month_dir(self.s.output_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / f"{clave}.firmado-local.xml").write_bytes(signed_xml)
+        return build_sbd_signed(doc, signed_xml, self.opts)
+
     def _reject_file(self, work: Path, titulo: str, detalle: list[str]) -> Result:
         dest = files.move(work, self.s.error_dir)
         files.write_error_log(dest, titulo, detalle)

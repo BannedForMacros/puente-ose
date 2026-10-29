@@ -18,7 +18,7 @@ from decimal import Decimal
 from lxml import etree
 
 from sovos_bridge.parser.models import Document, Party, Tax, dec
-from sovos_bridge.sbd.namespaces import CAC, CBC, ROOTS
+from sovos_bridge.sbd.namespaces import CAC, CBC, EXT, ROOTS
 from sovos_bridge.validation.catalogs import AFECTACION_GRATUITA, BASE_POR_TRIBUTO, TRIBUTOS
 
 UNECE = "United Nations Economic Commission for Europe"
@@ -59,7 +59,7 @@ def _fmt2(value: Decimal) -> str:
 
 
 def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defecto: str = "Contado",
-              sovos_sci: bool = False) -> etree._Element:
+              sovos_sci: bool = False, ubl_extensions: bool = False) -> etree._Element:
     """UBL del comprobante.
 
     sovos_sci=False: idéntico al XML que SUNAT aceptaba con el puente anterior.
@@ -67,11 +67,16 @@ def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defect
     Perú (colección Postman "Peru - eInvoicing Compliance"): sin cac:Signature
     (la agrega Sovos al firmar), con ProfileID (tipo de operación) y con el
     documento de emisor y cliente también en PartyTaxScheme.
+    ubl_extensions=True: agrega ext:UBLExtensions vacío para la firma propia (signer.py).
     """
     name = root_name(doc, note_root)
     ns, prefix = ROOTS[name]
     b = _B(doc.moneda)
-    root = etree.Element(f"{{{ns}}}{name}", nsmap={prefix: ns, "cac": CAC, "cbc": CBC})
+    nsmap = {prefix: ns, "cac": CAC, "cbc": CBC} | ({"ext": EXT} if ubl_extensions else {})
+    root = etree.Element(f"{{{ns}}}{name}", nsmap=nsmap)
+    if ubl_extensions:
+        ext = etree.SubElement(etree.SubElement(root, f"{{{EXT}}}UBLExtensions"), f"{{{EXT}}}UBLExtension")
+        etree.SubElement(ext, f"{{{EXT}}}ExtensionContent")
 
     # --- cabecera ----------------------------------------------------------
     b.cbc(root, "UBLVersionID", "2.1")

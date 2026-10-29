@@ -6,6 +6,7 @@
   python -m sovos_bridge retry-errors            reintenta errores de conexión
   python -m sovos_bridge report --date AAAA-MM-DD   resumen del día en CSV
   python -m sovos_bridge ui                      solo el panel web (sin procesar la bandeja)
+  python -m sovos_bridge certificado <archivo.pfx>  datos del certificado (pide la clave sin mostrarla)
 """
 
 from __future__ import annotations
@@ -57,11 +58,33 @@ def _parser() -> argparse.ArgumentParser:
     rp = sub.add_parser("report", help="resumen del día en CSV")
     rp.add_argument("--date", default=date.today().isoformat(), help="AAAA-MM-DD (por defecto hoy)")
     sub.add_parser("ui", help="abrir solo el panel web (estados, reintentos, consulta a Sovos)")
+    ce = sub.add_parser("certificado", help="mostrar serie y vigencia de un certificado .pfx/.p12")
+    ce.add_argument("archivo", type=Path)
     return p
+
+
+def _cert_info(path: Path) -> int:
+    """Muestra los datos para compararlos con SOL (Registro de certificado digital)."""
+    import getpass
+
+    from sovos_bridge.sbd import Signer, SigningError
+    try:
+        signer = Signer.from_pkcs12(path, getpass.getpass("Contraseña del certificado (no se muestra): "))
+    except SigningError as exc:
+        print(exc)
+        return 2
+    i = signer.info
+    print(f"Serie      : {i.serial_hex}")
+    print(f"Titular    : {i.subject}")
+    print(f"Vigencia   : {i.not_before:%d/%m/%Y} al {i.not_after:%d/%m/%Y}")
+    print("Comparar la serie con SOL > Registro y mantenimiento de certificados digitales.")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.cmd == "certificado":
+        return _cert_info(args.archivo)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     s = load_settings(args.env)
