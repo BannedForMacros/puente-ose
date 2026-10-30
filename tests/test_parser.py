@@ -106,3 +106,17 @@ def test_campo_desconocido_con_valor_genera_advertencia():
 def test_nombre_con_prefijo_del_sistema_java():
     info = parse_filename("100-175-20437310841-300-20437310841-07-FC01-00000050.txt")
     assert (info.ruc, info.tipo, info.serie_numero) == ("20437310841", "07", "FC01-00000050")
+
+
+def test_descripcion_con_barra_vertical_no_corre_los_campos():
+    # Caso real BT02-00010864: "LOSARTAN 50 MG | TAB RECUBIERTA-UNIDAD-AC FARMA"
+    from sovos_bridge.parser import parse_filename, parse_text
+    txt = BOLETA_TXT.read_text(encoding="utf-8")
+    det = next(l for l in txt.splitlines() if l.startswith("DET|"))
+    campos = det.split("|")
+    campos[3] = campos[3] + " | TAB RECUBIERTA"
+    doc = parse_text(txt.replace(det, "|".join(campos)), parse_filename(BOLETA_TXT.name))
+    original = parse_text(txt, parse_filename(BOLETA_TXT.name))
+    it, ok = doc.items[0], original.items[0]
+    assert it.descripcion.endswith("| TAB RECUBIERTA")
+    assert (it.cantidad, it.unidad_medida, it.valor_venta, it.tributos) == (ok.cantidad, ok.unidad_medida, ok.valor_venta, ok.tributos)

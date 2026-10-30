@@ -18,6 +18,26 @@ log = logging.getLogger(__name__)
 _FILE_CPE = re.compile(r"^(?:.*-)?(\d{11})-(\d{2})-([A-Z0-9]{4})-(\d{1,8})\.txt$", re.IGNORECASE)
 _FILE_BAJA = re.compile(r"^(\d{11})-(RA|RC|RR)-(\d{8})-(\d{1,5})\.txt$", re.IGNORECASE)
 _ZERO = re.compile(r"^0+(\.0+)?$")
+_NUM = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+def _join_split_description(fields: list[str], layout: dict[int, str], n: int) -> list[str]:
+    """Une la descripción del ítem si trae '|' en el texto (p. ej. "LOSARTAN 50 MG | TAB RECUBIERTA").
+
+    El '|' es el separador del TXT: sin esto, cantidad, unidad y montos quedan corridos.
+    Se reconoce porque la posición de la cantidad debe ser un número.
+    """
+    pos = {name: i for i, name in layout.items()}
+    d, q = pos.get("descripcion"), pos.get("cantidad")
+    if d is None or q != d + 1:
+        return fields
+    joined = False
+    while len(fields) > q + 1 and not _NUM.match(fields[q].strip()) and _NUM.match(fields[q + 1].strip() or "x"):
+        fields[d] = f"{fields[d]}|{fields.pop(q)}"
+        joined = True
+    if joined:
+        log.info("Línea %d: la descripción del ítem trae '|'; se tomó como texto: %s", n, fields[d].strip())
+    return fields
 
 
 class ParseError(Exception):
@@ -84,6 +104,8 @@ def read_records(text: str, tipo: str = "03") -> dict[str, list[dict[str, str]]]
         if rtype not in layouts:
             log.warning("Línea %d: tipo de registro desconocido '%s', se ignora", n, rtype)
             continue
+        if rtype == "DET":
+            fields = _join_split_description(fields, layouts[rtype], n)
         if rtype in records and rtype not in REPEATABLE:
             raise ParseError(f"Línea {n}: el registro {rtype} aparece más de una vez")
         records.setdefault(rtype, []).append(_named(layouts[rtype], fields))
