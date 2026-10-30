@@ -34,7 +34,7 @@ MAX_FILES = 500
 MAX_FILE_BYTES = 512 * 1024
 
 # Estados en los que Sovos ya tiene el comprobante: no se vuelve a encolar.
-YA_EN_SOVOS = {Estado.APROBADO, Estado.ENVIADO, Estado.EN_PROCESO, Estado.DUPLICADO}
+YA_EN_SOVOS = {Estado.APROBADO, Estado.ENVIADO, Estado.EN_PROCESO, Estado.DUPLICADO, Estado.EN_RESUMEN}
 
 
 @dataclass

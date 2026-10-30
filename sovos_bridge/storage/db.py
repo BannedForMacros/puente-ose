@@ -28,6 +28,7 @@ class Estado(StrEnum):
     RECHAZADO = "RECHAZADO"
     ERROR_CONEXION = "ERROR_CONEXION"
     DUPLICADO = "DUPLICADO"
+    EN_RESUMEN = "EN_RESUMEN"          # boleta informada en un resumen diario que SUNAT aún no responde
 
 
 PENDIENTES = (Estado.ENVIADO, Estado.EN_PROCESO)
@@ -135,6 +136,14 @@ CREATE TABLE IF NOT EXISTS bandeja (
 );
 CREATE INDEX IF NOT EXISTS ix_bandeja_estado ON bandeja(estado);
 CREATE INDEX IF NOT EXISTS ix_bandeja_ref ON bandeja(ref_clave);
+
+-- Resúmenes diarios enviados (el resumen en sí se sigue como un documento más, tipo RC).
+CREATE TABLE IF NOT EXISTS resumen_lineas (
+    resumen  TEXT NOT NULL,                       -- clave del resumen: RUC-RC-AAAAMMDD-N
+    clave    TEXT NOT NULL,                       -- comprobante incluido
+    PRIMARY KEY (resumen, clave)
+);
+CREATE INDEX IF NOT EXISTS ix_resumen_lineas_clave ON resumen_lineas(clave);
 """
 
 
@@ -199,7 +208,8 @@ class Database:
                 return Reserva("nuevo")
 
             estado = row["estado"]
-            en_sovos = estado in (Estado.APROBADO, Estado.ENVIADO, Estado.EN_PROCESO, Estado.DUPLICADO)
+            en_sovos = estado in (Estado.APROBADO, Estado.ENVIADO, Estado.EN_PROCESO, Estado.DUPLICADO,
+                                  Estado.EN_RESUMEN)
             # ERROR_CONEXION con documentId = Sovos lo recibió pero no se obtuvo respuesta final.
             if en_sovos or (estado == Estado.ERROR_CONEXION and row["document_id"]):
                 self._event(c, clave, None, f"TXT repetido recibido ({archivo}); estado actual {estado}, no se reenvía")
@@ -462,3 +472,22 @@ class Database:
                         c.execute(f"UPDATE {table} SET {col}=? WHERE rowid=?", (str(new_root.joinpath(*rel.parts)), rowid))
                         changed += 1
         return changed
+
+    # --- resúmenes diarios ----------------------------------------------------
+    def next_summary_number(self, ruc: str, fecha_generacion: str) -> int:
+        """Correlativo del día para RC-AAAAMMDD-N (no se reutiliza ni si el resumen falló)."""
+        pref = f"{ruc}-RC-{fecha_generacion.replace('-', '')}-"
+        with self._lock:
+            rows = self._conn.execute("SELECT clave FROM documentos WHERE clave LIKE ?", (pref + "%",)).fetchall()
+        nums = [int(r[0][len(pref):]) for r in rows if r[0][len(pref):].isdigit()]
+        return max(nums, default=0) + 1
+
+    def save_summary_lines(self, resumen: str, claves: list[str]) -> None:
+        with self._tx() as c:
+            c.executemany("INSERT OR IGNORE INTO resumen_lineas (resumen, clave) VALUES (?,?)",
+                          [(resumen, k) for k in claves])
+
+    def summary_lines(self, resumen: str) -> list[str]:
+        with self._lock:
+            return [r[0] for r in self._conn.execute(
+                "SELECT clave FROM resumen_lineas WHERE resumen=? ORDER BY clave", (resumen,)).fetchall()]

@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sovos_bridge.config import Settings
-from sovos_bridge.service import files
+from sovos_bridge.service import files, resumen
 from sovos_bridge.sovos import (
     Attachment, Notification, SovosClient, SovosError, is_cdr, parse_notifications,
 )
@@ -110,7 +110,8 @@ class StatusPoller:
         if rejected is not None:
             self._rejected(row, rejected)
         elif approved is not None:
-            if (xml_path and pdf_path) or completed:
+            # Un resumen diario no tiene PDF: basta con la aceptación de SUNAT.
+            if (xml_path and pdf_path) or completed or row["tipo"] == resumen.TIPO_RESUMEN:
                 self._approved(row, approved, xml_path, pdf_path)
             else:
                 if row["codigo_sovos"] != approved.response_code:
@@ -137,12 +138,16 @@ class StatusPoller:
             msg += " (" + "; ".join(notas) + ")"
         self.db.set_state(clave, Estado.APROBADO, msg, codigo_sovos=n.response_code,
                           codigo_sunat=n.govt_code or None, mensaje=msg)
+        if row["tipo"] == resumen.TIPO_RESUMEN:
+            resumen.propagar(self.db, row, True, msg, n.govt_code or None)
+            log.info("%s APROBADO (%s)", clave, msg)
+            return
         self._move_txt(row, self.s.processed_dir, remove_log=True)
         log.info("%s APROBADO (%s)", clave, msg)
 
     def _rejected(self, row: sqlite3.Row, n: Notification) -> None:
         clave = row["clave"]
-        if n.is_duplicate:
+        if n.is_duplicate and row["tipo"] != resumen.TIPO_RESUMEN:
             msg = f"Sovos indica que el documento ya fue procesado (código {n.cloud_code})"
             self.db.set_state(clave, Estado.DUPLICADO, msg, codigo_sovos=n.response_code, mensaje=msg)
             dest = self._move_txt(row, self.s.duplicates_dir)
@@ -154,6 +159,10 @@ class StatusPoller:
         msg = f"[{n.govt_code or n.cloud_code}] {motivo}"
         self.db.set_state(clave, Estado.RECHAZADO, msg, codigo_sovos=n.response_code,
                           codigo_sunat=n.govt_code or None, mensaje=msg)
+        if row["tipo"] == resumen.TIPO_RESUMEN:
+            resumen.propagar(self.db, row, False, msg, n.govt_code or None)
+            log.error("%s RECHAZADO: %s", clave, msg)
+            return
         dest = self._move_txt(row, self.s.error_dir)
         if dest:
             detalle = [
@@ -175,6 +184,18 @@ class StatusPoller:
         if elapsed < self.s.max_status_minutes:
             return
         clave = row["clave"]
+        if row["tipo"] == resumen.TIPO_RESUMEN:
+            # El resumen no tiene TXT que mover; sus comprobantes siguen EN_RESUMEN hasta saber el resultado.
+            if row["codigo_sovos"] in ("AP", "CA", "PD"):
+                msg = "Resumen aceptado (sin constancia completa de Sovos)"
+                self.db.set_state(clave, Estado.APROBADO, msg, mensaje=msg)
+                resumen.propagar(self.db, row, True, msg, row["codigo_sunat"])
+            else:
+                msg = (f"Sin respuesta final del resumen después de {self.s.max_status_minutes:.0f} min "
+                       f"(documentId {row['document_id']}); se sigue consultando con 'Reintentar'")
+                self.db.set_state(clave, Estado.ERROR_CONEXION, msg, mensaje=msg)
+            log.warning("%s: %s", clave, msg)
+            return
         if row["codigo_sovos"] in ("AP", "CA", "PD"):
             msg = f"Aprobado; XML/PDF no recibidos después de {self.s.max_status_minutes:.0f} min"
             self.db.set_state(clave, Estado.APROBADO, msg, mensaje=msg)

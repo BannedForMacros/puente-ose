@@ -111,37 +111,70 @@ def _business_process(bs, service: str) -> None:
     _e(_e(bp, "BusinessService"), "BusinessServiceName", service)
 
 
+@dataclass(frozen=True)
+class SummaryProduct:
+    """Cómo pedirle a Sovos el resumen diario. Sovos no publica estos valores para Perú:
+    se configuran (SOVOS_RC_*) y se confirman con el primer resumen aceptado."""
+    output_schema: str = "summaryDocuments"
+    meta_schema: str = ""
+    transform: str = "LEGAL-TO-SCI_SUMMARY_DOCUMENTS"
+    version: str = "2.0"
+
+
+def build_sbd_summary(clave: str, ruc: str, signed_xml: bytes, opts: SbdOptions = SbdOptions(),
+                      product: SummaryProduct = SummaryProduct(), now: datetime | None = None) -> etree._Element:
+    """SBD del resumen diario ya firmado: Sovos solo lo mapea y lo transmite."""
+    root, bs = _envelope_raw(ruc=ruc, receiver="", clave=clave, category="BusinessToConsumer", opts=opts, now=now,
+                             output_schema=product.output_schema, meta_schema=product.meta_schema,
+                             transform=product.transform, version=product.version)
+    _business_process(bs, "Mapping")
+    _business_process(bs, "Transmission")
+    sd = etree.SubElement(root, f"{{{SVS}}}SovosDocument")
+    legal = etree.SubElement(sd, f"{{{SVS}}}SovosLegalDocument")
+    emb = etree.SubElement(etree.SubElement(legal, f"{{{ENC}}}Base64Document", nsmap={"enc": ENC}),
+                           f"{{{ENC}}}EmbeddedDocument", mimeCode="application/xml", fileName=f"{clave}.xml")
+    emb.text = base64.b64encode(signed_xml).decode("ascii")
+    return root
+
+
 def _envelope(doc: Document, opts: SbdOptions, now: datetime | None, output_schema: str, meta_schema: str,
               transform: str):
+    category = business_category(doc) if opts.business_category == "auto" else opts.business_category
+    return _envelope_raw(ruc=doc.ruc_emisor, receiver=doc.cliente.numero_documento or "", clave=doc.clave,
+                         category=category, opts=opts, now=now, output_schema=output_schema,
+                         meta_schema=meta_schema, transform=transform, version=PRODUCT_VERSION)
+
+
+def _envelope_raw(*, ruc: str, receiver: str, clave: str, category: str, opts: SbdOptions, now: datetime | None,
+                  output_schema: str, meta_schema: str, transform: str, version: str):
     now = now or datetime.now(UTC)
     root = etree.Element(f"{{{SBD}}}StandardBusinessDocument", nsmap={"sbd": SBD, "svs": SVS, "sci": SCI})
     h = _e(root, "StandardBusinessDocumentHeader")
     _e(h, "HeaderVersion", "1.0")
 
     sender = _e(h, "Sender")
-    _e(sender, "Identifier", doc.ruc_emisor, Authority="PE")
-    _e(_e(sender, "ContactInformation"), "Contact", doc.ruc_emisor)
+    _e(sender, "Identifier", ruc, Authority="PE")
+    _e(_e(sender, "ContactInformation"), "Contact", ruc)
 
-    receiver = _e(h, "Receiver")
-    _e(receiver, "Identifier", doc.cliente.numero_documento or "", Authority="PE")
+    rcv = _e(h, "Receiver")
+    _e(rcv, "Identifier", receiver, Authority="PE")
 
     di = _e(h, "DocumentIdentification")
     _e(di, "Standard", DOC_STANDARD)
     _e(di, "TypeVersion", "2.1")
-    _e(di, "InstanceIdentifier", doc.clave)
+    _e(di, "InstanceIdentifier", clave)
     _e(di, "Type", DOC_TYPE)
     _e(di, "MultipleType", "false")
     _e(di, "CreationDateAndTime", now.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     bs = _e(h, "BusinessScope")
     _scope(bs, "Country", "PE")
-    _scope(bs, "Version", PRODUCT_VERSION)
+    _scope(bs, "Version", version)
     _scope(bs, "ProcessType", "Outbound")
-    _scope(bs, "CompanyCode", doc.ruc_emisor)
-    _scope(bs, "SenderDocumentId", doc.clave)
+    _scope(bs, "CompanyCode", ruc)
+    _scope(bs, "SenderDocumentId", clave)
     _scope(bs, "SenderSystemId", opts.sender_system_id)
-    _scope(bs, "BusinessCategory",
-           business_category(doc) if opts.business_category == "auto" else opts.business_category)
+    _scope(bs, "BusinessCategory", category)
     _scope(bs, "Mapping.OutputSchema", output_schema)
     _scope(bs, "Mapping.TransformDocument", transform)
     if meta_schema:

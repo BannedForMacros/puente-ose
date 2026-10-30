@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from sovos_bridge.config import Settings, load_settings
 from sovos_bridge.service.bandeja import Bandeja
+from sovos_bridge.service.resumen import Resumenes
 from sovos_bridge.service.configuracion import pendientes
 from sovos_bridge.service.pipeline import Pipeline
 from sovos_bridge.service.status import StatusPoller
@@ -29,7 +30,7 @@ class Service:
         self.env_file = env_file
         self.client_factory = client_factory
         self.watcher = InboxWatcher(settings.inbox_dir, settings.file_stable_seconds)
-        self.bandeja = Bandeja(settings, pipeline.db)
+        self.bandeja = Bandeja(settings, pipeline.db, Resumenes(settings, pipeline.db, pipeline.client, pipeline.signer))
         self.stop_event = threading.Event()
         # Un cambio de configuración espera a que termine el TXT en curso.
         self.lock = threading.RLock()
@@ -51,7 +52,7 @@ class Service:
             self.poller = StatusPoller(s, db, client) if client is not None else None
             if self.watcher.inbox != s.inbox_dir:
                 self.watcher = InboxWatcher(s.inbox_dir, s.file_stable_seconds)
-            self.bandeja = Bandeja(s, db)
+            self.bandeja = Bandeja(s, db, Resumenes(s, db, client, self.pipeline.signer))
             if self.panel is not None:
                 self.panel.apply(s, client, self.poller)
             self._aviso_pendiente = ""

@@ -69,6 +69,7 @@ def test_factura_vencida_no_sale_hasta_asignarle_fecha(settings, db):
 
 
 def test_separados_no_salen_salvo_que_se_pida(settings, db):
+    settings.boletas_por_resumen = False    # envío una por una (flujo diario)
     txt = BOLETA_TXT.read_bytes().replace(b"[1000|", b"[9998|").replace(b"|10|", b"|30|")
     assert add(settings, db, BOLETA_TXT.name, txt) == bj.SEPARADO
     tray = Bandeja(settings, db)
@@ -78,6 +79,7 @@ def test_separados_no_salen_salvo_que_se_pida(settings, db):
 
 
 def test_nota_espera_a_su_comprobante(settings, db):
+    settings.boletas_por_resumen = False    # envío una por una (flujo diario)
     settings.plazo_boleta_dias = 3650      # la nota de muestra es de marzo; aquí solo importa la espera
     add(settings, db, BOLETA_TXT.name, BOLETA_TXT.read_bytes())
     add(settings, db, f"{NOTA}.txt", note_text().encode())
@@ -98,6 +100,7 @@ def test_nota_espera_a_su_comprobante(settings, db):
 
 
 def test_nota_con_referencia_desconocida_pide_confirmacion(settings, db):
+    settings.boletas_por_resumen = False    # envío una por una (flujo diario)
     settings.plazo_boleta_dias = 3650
     add(settings, db, f"{NOTA}.txt", note_text().encode())
     tray = Bandeja(settings, db)

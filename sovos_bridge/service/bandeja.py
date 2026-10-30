@@ -43,6 +43,9 @@ EN_COLA = "EN_COLA"
 EN_BANDEJA = (PREPARADO, SEPARADO, ESPERANDO)   # todavía no salieron hacia Sovos
 
 ESPECIALES = ("inafecto", "exonerado", "gratuito", "exportacion")
+# Rechazos que se corrigen desde la bandeja: 2108 fuera de fecha; 1079 boleta que solo
+# puede informarse en un resumen diario.
+RECHAZOS_RECUPERABLES = {"2108", "1079"}
 _BOM = b"\xef\xbb\xbf"
 
 
@@ -113,15 +116,18 @@ def redate(data: bytes, tipo: str, nueva: str) -> bytes:
 class Resultado:
     hechos: list[str] = field(default_factory=list)
     omitidos: list[dict[str, str]] = field(default_factory=list)
+    resumenes: list[dict[str, Any]] = field(default_factory=list)
+    error: str = ""
 
     def as_dict(self) -> dict[str, Any]:
-        return {"hechos": self.hechos, "omitidos": self.omitidos}
+        return {"hechos": self.hechos, "omitidos": self.omitidos, "resumenes": self.resumenes, "error": self.error}
 
 
 class Bandeja:
-    def __init__(self, settings: Settings, db: Database):
+    def __init__(self, settings: Settings, db: Database, resumenes: Any = None):
         self.s = settings
         self.db = db
+        self.resumenes = resumenes      # service.resumen.Resumenes: boletas por resumen diario
 
     # --- entrada --------------------------------------------------------------
     def add(self, *, data: bytes, nombre_final: str, doc: Document, sha256: str, separar: bool,
@@ -150,10 +156,10 @@ class Bandeja:
         return estado
 
     def bring_back_rejected_by_date(self, usuario: str) -> Resultado:
-        """Trae a la bandeja los rechazados por SUNAT por fecha (2108) para asignarles fecha nueva."""
+        """Trae a la bandeja los rechazados por fecha (2108) o que piden resumen diario (1079)."""
         r = Resultado()
         for row in self.db.by_states(Estado.RECHAZADO):
-            if (row["codigo_sunat"] or "") != "2108" or self.db.staged_one(row["clave"]) is not None:
+            if not self._recuperable(row):
                 continue
             src = Path(row["archivo"] or "")
             if not src.is_file():
@@ -165,6 +171,12 @@ class Bandeja:
                      separar=False, carga_id=None, cliente_doc=row["cliente_doc"] or "", usuario=usuario)
             r.hechos.append(row["clave"])
         return r
+
+    def _recuperable(self, row: sqlite3.Row) -> bool:
+        if (row["codigo_sunat"] or "") not in RECHAZOS_RECUPERABLES:
+            return False
+        staged = self.db.staged_one(row["clave"])
+        return staged is None or staged["estado"] not in EN_BANDEJA
 
     # --- lectura ----------------------------------------------------------------
     def rows(self, hoy: date | None = None) -> list[dict[str, Any]]:
@@ -219,8 +231,7 @@ class Bandeja:
     def summary(self, hoy: date | None = None) -> dict[str, Any]:
         hoy = hoy or date.today()
         rows = self.rows(hoy)
-        rechazados_fecha = sum(1 for d in self.db.by_states(Estado.RECHAZADO)
-                               if (d["codigo_sunat"] or "") == "2108" and self.db.staged_one(d["clave"]) is None)
+        rechazados_fecha = sum(1 for d in self.db.by_states(Estado.RECHAZADO) if self._recuperable(d))
         return {
             "filas": rows,
             "fechas": {f: fechas_disponibles(self.s, f, hoy) for f in ("factura", "boleta")},
@@ -236,6 +247,7 @@ class Bandeja:
         aprobado quedan esperando y el servicio las suelta cuando lo esté."""
         hoy = hoy or date.today()
         res = Resultado()
+        para_resumen: list[sqlite3.Row] = []
         staged = {r["clave"]: r for r in self.db.staged(*EN_BANDEJA)}
         pedidos = [staged[c] for c in dict.fromkeys(claves) if c in staged]
         for c in claves:
@@ -251,6 +263,7 @@ class Bandeja:
                 res.omitidos.append({"clave": r["clave"], "motivo": f"Separado ({', '.join(d['especiales'])})"})
                 continue
             ref = d["referencia"]
+            por_resumen = self.s.boletas_por_resumen and d["familia"] == "boleta"
             if ref is not None and ref["estado"] != Estado.APROBADO:
                 if ref["estado"] == "DESCONOCIDA" and not incluir_sin_referencia:
                     res.omitidos.append({"clave": r["clave"], "motivo":
@@ -263,14 +276,31 @@ class Bandeja:
                                                   "esté aprobado para enviarse")
                     res.hechos.append(r["clave"])
                     continue
+            if por_resumen:
+                para_resumen.append(r)
+                continue
             self._to_queue(r, usuario)
             res.hechos.append(r["clave"])
+        self._enviar_resumen(para_resumen, usuario, res, hoy)
         return res
+
+    def _enviar_resumen(self, filas: list[sqlite3.Row], usuario: str, res: Resultado, hoy: date) -> None:
+        if not filas:
+            return
+        if self.resumenes is None:
+            res.omitidos += [{"clave": r["clave"], "motivo": "El resumen diario no está disponible"} for r in filas]
+            return
+        env = self.resumenes.enviar(filas, usuario, hoy)
+        res.hechos += env.incluidos
+        res.omitidos += env.omitidos
+        res.resumenes += env.resumenes
+        res.error = res.error or env.error
 
     def release_waiting(self, hoy: date | None = None) -> int:
         """Lo llama el servicio en cada vuelta: suelta las notas cuyo comprobante ya fue aprobado."""
         hoy = hoy or date.today()
         n = 0
+        notas_resumen: list[sqlite3.Row] = []
         for r in self.db.staged(ESPERANDO):
             ref = self._ref_state(r)
             if ref["estado"] == Estado.APROBADO:
@@ -278,12 +308,21 @@ class Bandeja:
                     self.db.update_staged(r["clave"], estado=PREPARADO,
                                           mensaje="Venció el plazo mientras esperaba: asígnale una fecha nueva")
                     continue
+                if self.s.boletas_por_resumen and familia(r["serie_numero"]) == "boleta":
+                    notas_resumen.append(r)
+                    continue
                 self._to_queue(r, r["liberado_por"] or "servicio")
                 n += 1
             elif ref["estado"] in (Estado.RECHAZADO, Estado.VALIDACION_ERROR, Estado.DUPLICADO):
                 msg = f"{ref['serie_numero']} terminó {ref['estado']}: la nota sigue esperando"
                 if r["mensaje"] != msg:
                     self.db.update_staged(r["clave"], mensaje=msg)
+        if notas_resumen:
+            res = Resultado()
+            self._enviar_resumen(notas_resumen, notas_resumen[0]["liberado_por"] or "servicio", res, hoy)
+            n += len(res.hechos)
+            if res.error:
+                log.error("Bandeja: no se pudo enviar el resumen de notas: %s", res.error)
         if n:
             log.info("Bandeja: %d notas liberadas porque su comprobante ya fue aprobado", n)
         return n

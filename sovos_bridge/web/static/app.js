@@ -12,15 +12,16 @@ const ESTADOS = {
   ERROR_CONEXION:   { label: "Error de envío",      tone: "bad" },
   VALIDACION_ERROR: { label: "Error de validación", tone: "warn" },
   DUPLICADO:        { label: "Duplicado",           tone: "warn" },
+  EN_RESUMEN:       { label: "En resumen diario",   tone: "info" },
 };
 const SOVOS_CODES = { AP: "AP, aprobado", CA: "CA, aprobado con observaciones", RE: "RE, rechazado", IP: "IP, en proceso", PD: "PD, pendiente" };
-const TIPOS = { "01": "Factura", "03": "Boleta", "07": "Nota de crédito", "08": "Nota de débito" };
+const TIPOS = { "01": "Factura", "03": "Boleta", "07": "Nota de crédito", "08": "Nota de débito", RC: "Resumen diario" };
 
 // Etapas del recorrido (secuencia real) y grupos que requieren atención.
 const STAGES = [
   { key: "bandeja", name: "En cola", hint: "Saliendo hacia Sovos", estados: null, tone: "idle" },
   { key: "recibido", name: "Recibidos", hint: "Validando y armando", estados: ["RECIBIDO"], tone: "idle" },
-  { key: "sovos", name: "En Sovos", hint: "Esperando a SUNAT", estados: ["ENVIADO", "EN_PROCESO"], tone: "info" },
+  { key: "sovos", name: "En Sovos", hint: "Esperando a SUNAT", estados: ["ENVIADO", "EN_PROCESO", "EN_RESUMEN"], tone: "info" },
   { key: "aprobado", name: "Aprobados", hint: "Aceptados por SUNAT", estados: ["APROBADO"], tone: "ok" },
 ];
 const ALERTS = [
@@ -1035,7 +1036,7 @@ const REF_ESTADO = {
   ERROR_CONEXION: "con error de envío", RECIBIDO: "procesándose", DUPLICADO: "duplicado",
 };
 const STEP_DEFS = [
-  { key: "03", name: "Boletas", one: "boleta", many: "boletas", match: (r) => r.tipo === "03" },
+  { key: "03", name: "Boletas (resumen diario)", one: "boleta", many: "boletas", match: (r) => r.tipo === "03" },
   { key: "01", name: "Facturas", one: "factura", many: "facturas", match: (r) => r.tipo === "01" },
   { key: "nota", name: "Notas", one: "nota", many: "notas", match: (r) => isNota(r) },
 ];
@@ -1166,8 +1167,8 @@ function renderTrayAlerts() {
       actions: [["Ver cuáles", "chip:esperando"]] });
   }
   if (tray.rechazados) {
-    cards.push({ tone: "bad", n: tray.rechazados, title: "Rechazados por fecha",
-      text: "SUNAT los rechazó por presentarse fuera de plazo (2108). Tráelos a la bandeja para darles una fecha nueva.",
+    cards.push({ tone: "bad", n: tray.rechazados, title: "Rechazados para corregir",
+      text: "SUNAT los rechazó por plazo (2108) o porque piden resumen diario (1079). Tráelos a la bandeja para reenviarlos.",
       actions: [["Traer a la bandeja", "bring-back", true]] });
   }
   if (!cards.length && R.length) {
@@ -1324,8 +1325,11 @@ async function releaseRows(rows, { title, btn } = {}) {
   const sinRef = rows.filter((r) => r.grupo === "listo" && r.referencia && r.referencia.estado === "DESCONOCIDA");
   const esperan = rows.filter((r) => r.referencia && !["APROBADO", "DESCONOCIDA"].includes(r.referencia.estado)).length;
   const s = state.summary;
+  const boletas = rows.filter((r) => r.familia === "boleta" && r.grupo !== "fuera_plazo" && r.grupo !== "separado").length;
+  const fechasRes = new Set(rows.filter((r) => r.familia === "boleta").map((r) => r.fecha_efectiva)).size;
   const notas = [
-    `<p>Pasan a la cola de envío de la más antigua a la más reciente y el servicio los envía a Sovos${s ? ` (${esc(s.ambiente)})` : ""}.</p>`,
+    boletas ? `<p>${fmtCount(boletas, "boleta o nota de boleta va", "boletas y notas de boleta van")} a SUNAT en <strong>resúmenes diarios</strong>, uno por fecha de emisión (${fmtCount(fechasRes, "fecha", "fechas")}), y salen de inmediato${s ? ` (${esc(s.ambiente)})` : ""}.</p>` : "",
+    rows.length - boletas - fuera.length - sep.length > 0 ? `<p>Las facturas pasan a la cola de envío, de la más antigua a la más reciente.</p>` : "",
     esperan ? `<p>${fmtCount(esperan, "nota esperará", "notas esperarán")} a que su comprobante esté aprobado y saldrán solas.</p>` : "",
     fuera.length ? `<p>${fmtCount(fuera.length, "está fuera de plazo y no se incluye", "están fuera de plazo y no se incluyen")}: primero asígnales una fecha nueva.</p>` : "",
   ].join("");
@@ -1350,7 +1354,15 @@ async function releaseRows(rows, { title, btn } = {}) {
   busy(btn, true);
   try {
     const r = await trayPost("liberar", { claves: rows.map((x) => x.clave), incluir_separados: incluirSep, incluir_sin_referencia: incluirSinRef });
-    await afterTrayAction(r, (h) => `${fmtCount(h.length, "comprobante liberado", "comprobantes liberados")}`);
+    if (r && r.error) {
+      await confirmModal({ title: "No se pudo enviar el resumen diario", ok: "Entendido",
+        html: `<p>${esc(r.error)}</p><p>Las boletas siguen en la bandeja; no se envió nada de ellas.</p>` });
+    }
+    const res = (r && r.resumenes) || [];
+    await afterTrayAction(r, (h) => res.length
+      ? `${fmtCount(res.length, "resumen diario enviado", "resúmenes diarios enviados")} (${res.map((x) => `${x.id}: ${x.comprobantes} del ${fmtDate(x.fecha)}`).join("; ")})`
+        + (h.length > res.reduce((n, x) => n + x.comprobantes, 0) ? `, más ${h.length - res.reduce((n, x) => n + x.comprobantes, 0)} a la cola` : "")
+      : `${fmtCount(h.length, "comprobante liberado", "comprobantes liberados")}`);
   } catch (err) { toast(err.message, "bad"); }
   finally { busy(btn, false); }
 }

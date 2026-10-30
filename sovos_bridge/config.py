@@ -39,7 +39,16 @@ class Settings(BaseModel):
     # Días calendario, desde el día siguiente a la emisión, para que SUNAT reciba el comprobante.
     # Facturas y sus notas: 3. Boletas y sus notas: según lo indicado por contabilidad.
     plazo_factura_dias: int = Field(3, ge=0)
-    plazo_boleta_dias: int = Field(30, ge=0)
+    # Boletas: SUNAT solo las acepta una por una si son recientes (si no, error 1079); por
+    # resumen diario, hasta el séptimo día calendario siguiente a la emisión.
+    plazo_boleta_dias: int = Field(7, ge=0)
+    # La bandeja envía las boletas y sus notas en resúmenes diarios (uno por fecha de emisión)
+    boletas_por_resumen: bool = True
+    # Cómo pedirle a Sovos el resumen diario (no documentado para Perú; ver sbd.SummaryProduct)
+    sovos_rc_output_schema: str = "summaryDocuments"
+    sovos_rc_meta_schema: str = ""
+    sovos_rc_transform: str = "LEGAL-TO-SCI_SUMMARY_DOCUMENTS"
+    sovos_rc_version: str = "2.0"
 
     inbox_dir: Path = Path("inbox")
     work_dir: Path = Path("work")

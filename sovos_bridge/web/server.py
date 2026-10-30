@@ -35,6 +35,8 @@ from sovos_bridge import __version__
 from sovos_bridge.config import Settings, env_path
 from sovos_bridge.service.bandeja import EN_BANDEJA, Bandeja
 from sovos_bridge.service.configuracion import ConfigError, Configuracion, pendientes
+from sovos_bridge.service.resumen import Resumenes
+from sovos_bridge.sbd import Signer, SigningError
 from sovos_bridge.service.operations import REPORT_COLUMNS, RETRYABLE, retry_errors, retry_one
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.sovos import SovosClient, SovosError, parse_notifications
@@ -247,7 +249,7 @@ class PanelApp:
             raise PanelError(HTTPStatus.BAD_REQUEST, "Lista de comprobantes inválida")
         if action != "traer-rechazados" and not claves:
             raise PanelError(HTTPStatus.BAD_REQUEST, "No se eligió ningún comprobante")
-        tray = Bandeja(self.s, self.db)
+        tray = Bandeja(self.s, self.db, self._resumenes())
         if action == "liberar" and any(x.clave == "carpeta" for x in pendientes(self.s)):
             raise PanelError(HTTPStatus.CONFLICT,
                              "Primero indica en Configuración la carpeta donde el sistema deja los TXT")
@@ -264,6 +266,16 @@ class PanelApp:
             r = tray.bring_back_rejected_by_date(usuario)
         log.info("Panel: bandeja %s por %s, %d hechos, %d omitidos", action, usuario, len(r.hechos), len(r.omitidos))
         return r.as_dict()
+
+    def _resumenes(self) -> Resumenes:
+        """Boletas por resumen diario: firma con el certificado de la clínica y envía por el cliente actual."""
+        signer = None
+        if self.s.sovos_signing_mode == "propio" and self.s.cert_path:
+            try:
+                signer = Signer.from_pkcs12(Path(self.s.cert_path), self.s.cert_password.get_secret_value())
+            except SigningError as exc:
+                log.warning("Resumen diario sin certificado utilizable: %s", exc)
+        return Resumenes(self.s, self.db, self.client, signer)
 
     # --- configuración ---------------------------------------------------------
     def _config(self) -> Configuracion:
