@@ -9,7 +9,7 @@ from pathlib import Path
 from lxml import etree
 
 from sovos_bridge.config import Settings
-from sovos_bridge.logging_setup import mask_doc, register_sensitive
+from sovos_bridge.logging_setup import register_sensitive
 from sovos_bridge.parser import ParseError, parse_file, parse_filename
 from sovos_bridge.sbd import (
     SbdOptions, SchemaError, Signer, SigningError, build_sbd, build_sbd_signed, build_ubl, serialize, to_base64,
@@ -131,7 +131,10 @@ class Pipeline:
         if not self.s.dry_run:
             self.db.update_fields(clave, fecha_emision=doc.fecha_emision, moneda=doc.moneda,
                                   importe_total=doc.importe_total,
-                                  cliente_doc=mask_doc(doc.cliente.numero_documento),
+                                  cliente_doc=doc.cliente.numero_documento,
+                                  cliente_tipo_doc=doc.cliente.tipo_documento,
+                                  cliente_nombre=doc.cliente.razon_social,
+                                  referencia=doc.referencia.serie_numero if doc.referencia else None,
                                   fecha_emision_original=self._fecha_original(clave, doc.fecha_emision))
 
         # --- SBD -------------------------------------------------------------

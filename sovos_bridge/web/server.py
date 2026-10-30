@@ -41,7 +41,7 @@ from sovos_bridge.service.operations import REPORT_COLUMNS, RETRYABLE, retry_err
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.sovos import SovosClient, SovosError, parse_notifications
 from sovos_bridge.storage import PENDIENTES, Database, Estado
-from sovos_bridge.web import upload
+from sovos_bridge.web import upload, xlsx
 
 log = logging.getLogger(__name__)
 
@@ -183,6 +183,88 @@ class PanelApp:
                 break
             page += 1
         return ("﻿" + out.getvalue()).encode("utf-8")   # BOM: Excel lee bien las tildes
+
+    def _all_rows(self, params: dict[str, str]) -> list[sqlite3.Row]:
+        """Todas las filas que coinciden con los filtros del panel (sin paginar)."""
+        out, page = [], 1
+        while True:
+            rows, total = self.db.search(
+                q=params.get("q", "")[:100],
+                estados=tuple(e for e in params.get("estado", "").split(",") if e in Estado.__members__),
+                tipo=params.get("tipo", "")[:2], desde=_date(params.get("desde")),
+                hasta=_date(params.get("hasta")), sort=params.get("sort", "fecha_emision"),
+                desc=params.get("dir", "asc") == "desc", page=page, per_page=500,
+            )
+            out += rows
+            if page * 500 >= total:
+                return out
+            page += 1
+
+    def export_xlsx(self, params: dict[str, str]) -> bytes:
+        """Reporte para contabilidad: lo que muestra el panel con sus filtros, listo para cruzar con SUNAT."""
+        rows = self._all_rows(params)
+        C = xlsx.Column
+        cols = [
+            C("Tipo", width=16), C("Serie", width=8), C("Número", width=11), C("Comprobante", width=16),
+            C("Fecha de emisión real (TXT)", xlsx.DATE, 14), C("Fecha de emisión enviada a SUNAT", xlsx.DATE, 15),
+            C("¿Fecha cambiada?", width=10), C("Comprobante que modifica (notas)", width=16),
+            C("Cliente: tipo de documento", width=12), C("Cliente: N.º de documento", width=15),
+            C("Cliente: nombre o razón social", width=36), C("Moneda", width=8),
+            C("Importe total", xlsx.MONEY, 13), C("Estado en SUNAT", width=24), C("Código SUNAT", width=10),
+            C("Respuesta de SUNAT", width=48), C("Estado en el puente", width=18),
+            C("Enviado a Sovos", xlsx.DATETIME, 17), C("Última actualización", xlsx.DATETIME, 17),
+            C("documentId Sovos", width=34), C("Archivo TXT", width=40),
+        ]
+        data = []
+        for r in rows:
+            serie, _, numero = (r["serie_numero"] or "").partition("-")
+            real = r["fecha_emision_original"] or r["fecha_emision"]
+            data.append([
+                _TIPOS.get(r["tipo"], r["tipo"]), serie, int(numero) if numero.isdigit() else numero,
+                r["serie_numero"], real, r["fecha_emision"],
+                "Sí" if r["fecha_emision_original"] and r["fecha_emision_original"] != r["fecha_emision"] else "No",
+                r["referencia"] or "", _DOCS.get(r["cliente_tipo_doc"] or "", r["cliente_tipo_doc"] or ""),
+                r["cliente_doc"] or "", r["cliente_nombre"] or "", r["moneda"] or "",
+                _num(r["importe_total"]), _ESTADO_SUNAT.get(r["estado"], r["estado"]),
+                _codigo_sunat(r), r["mensaje"] or "", r["estado"],
+                r["enviado_en"], r["actualizado_en"], r["document_id"] or "",
+                Path(r["archivo"]).name if r["archivo"] else "",
+            ])
+        return xlsx.workbook([xlsx.Sheet("Comprobantes", cols, data), self._resumen_sheet(rows, params)])
+
+    def _resumen_sheet(self, rows: list[sqlite3.Row], params: dict[str, str]) -> "xlsx.Sheet":
+        filtros = [f"{k}: {v}" for k, v in (("Búsqueda", params.get("q")), ("Tipo", _TIPOS.get(params.get("tipo", ""), "")),
+                                           ("Estado", params.get("estado")), ("Emitidos desde", params.get("desde")),
+                                           ("Emitidos hasta", params.get("hasta"))) if v]
+        extra: list[tuple[int, list[Any]]] = [
+            (xlsx.TITLE, ["Reporte de comprobantes enviados a SUNAT (por Sovos)"]),
+            (xlsx.TEXT, ["Emisor", f"RUC {self.s.emisor_ruc}"]),
+            (xlsx.TEXT, ["Generado", datetime.now().strftime("%d/%m/%Y %H:%M")]),
+            (xlsx.TEXT, ["Filtros", "; ".join(filtros) or "Ninguno (todos los comprobantes)"]),
+            (xlsx.TEXT, ["Comprobantes", len(rows)]),
+            (xlsx.TEXT, []),
+            (xlsx.TITLE, ["Por fecha enviada a SUNAT y tipo"]),
+            (xlsx.HEADER, ["Fecha enviada", "Tipo", "Cantidad", "Aceptados", "Rechazados", "Pendientes u otros",
+                           "Importe aceptado"]),
+        ]
+        grupos: dict[tuple[str, str], list[sqlite3.Row]] = {}
+        for r in rows:
+            grupos.setdefault((r["fecha_emision"] or "", _TIPOS.get(r["tipo"], r["tipo"])), []).append(r)
+        for (fecha, tipo), g in sorted(grupos.items()):
+            ok = [r for r in g if r["estado"] == Estado.APROBADO]
+            rech = sum(1 for r in g if r["estado"] == Estado.RECHAZADO)
+            extra.append((xlsx.TEXT, [_dmy(fecha), tipo, len(g), len(ok), rech, len(g) - len(ok) - rech,
+                                      round(sum(_num(r["importe_total"]) for r in ok), 2)]))
+        cambios: dict[tuple[str, str], int] = {}
+        for r in rows:
+            if r["fecha_emision_original"] and r["fecha_emision_original"] != r["fecha_emision"]:
+                k = (r["fecha_emision_original"], r["fecha_emision"])
+                cambios[k] = cambios.get(k, 0) + 1
+        extra += [(xlsx.TEXT, []), (xlsx.TITLE, ["Fechas reasignadas (fuera de plazo): fecha real del TXT -> fecha enviada"]),
+                  (xlsx.HEADER, ["Fecha real (TXT)", "Fecha enviada", "Cantidad"])]
+        extra += [(xlsx.TEXT, [_dmy(a), _dmy(b), n]) for (a, b), n in sorted(cambios.items())] or \
+                 [(xlsx.TEXT, ["Ninguna"])]
+        return xlsx.Sheet("Resumen", [], autofilter=False, extra=extra)
 
     def file_for(self, clave: str, kind: str) -> Path:
         row = self._row(clave)
@@ -418,6 +500,8 @@ class PanelApp:
             "clave": r["clave"], "tipo": r["tipo"], "serie_numero": r["serie_numero"],
             "estado": r["estado"], "document_id": r["document_id"], "fecha_emision": r["fecha_emision"],
             "fecha_emision_original": r["fecha_emision_original"],
+            "cliente_tipo_doc": r["cliente_tipo_doc"], "cliente_nombre": r["cliente_nombre"],
+            "referencia": r["referencia"],
             "moneda": r["moneda"], "importe_total": r["importe_total"], "cliente_doc": r["cliente_doc"],
             "enviado_en": r["enviado_en"], "envio_incierto": bool(r["envio_incierto"]),
             "intentos_envio": r["intentos_envio"], "codigo_sovos": r["codigo_sovos"],
@@ -473,6 +557,11 @@ def make_handler(app: PanelApp):
                 return self._json(app.summary())
             if method == "GET" and path == "/api/documents":
                 return self._json(app.documents(params))
+            if method == "GET" and path == "/api/export.xlsx":
+                name = f"comprobantes_sunat_{date.today().isoformat()}.xlsx"
+                return self._send(HTTPStatus.OK, app.export_xlsx(params),
+                                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                  {"Content-Disposition": f'attachment; filename="{name}"'})
             if method == "GET" and path == "/api/export.csv":
                 name = f"comprobantes_{date.today().isoformat()}.csv"
                 return self._send(HTTPStatus.OK, app.export_csv(params), "text/csv; charset=utf-8",
@@ -589,6 +678,29 @@ def start_panel(app: PanelApp) -> tuple[ThreadingHTTPServer, threading.Thread] |
     log.info("Panel web en http://%s:%d%s", host, server.server_address[1],
              "" if password else " (sin clave: solo accesible desde este equipo)")
     return server, thread
+
+
+# --- reporte ----------------------------------------------------------------
+_TIPOS = {"01": "Factura", "03": "Boleta", "07": "Nota de crédito", "08": "Nota de débito", "RC": "Resumen diario"}
+_DOCS = {"0": "Sin documento", "1": "DNI", "4": "Carné de extranjería", "6": "RUC", "7": "Pasaporte",
+         "A": "Cédula diplomática", "-": "Varios"}
+_ESTADO_SUNAT = {
+    "APROBADO": "Aceptado", "RECHAZADO": "Rechazado", "DUPLICADO": "Ya registrado (no se reenvió)",
+    "ENVIADO": "Pendiente de respuesta", "EN_PROCESO": "Pendiente de respuesta",
+    "EN_RESUMEN": "Pendiente (resumen diario)", "RECIBIDO": "En proceso en el puente",
+    "VALIDACION_ERROR": "No enviado (error de validación)", "ERROR_CONEXION": "Sin confirmar (error de envío)",
+}
+
+
+def _codigo_sunat(r: sqlite3.Row) -> str:
+    code = r["codigo_sunat"] or ""
+    if r["estado"] == "APROBADO" and not code.isdigit():
+        return "0"
+    return code
+
+
+def _dmy(iso: str | None) -> str:
+    return f"{iso[8:10]}/{iso[5:7]}/{iso[:4]}" if iso and len(iso) >= 10 else (iso or "")
 
 
 # --- conversiones -----------------------------------------------------------

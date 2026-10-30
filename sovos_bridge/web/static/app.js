@@ -241,7 +241,7 @@ function rowHtml(d) {
       <td class="tnum" data-label="Emisión">${d.fecha_emision_original
         ? `<span class="date-old" title="Fecha del TXT original">${fmtDate(d.fecha_emision_original)}</span>${fmtDate(d.fecha_emision)}`
         : fmtDate(d.fecha_emision)}</td>
-      <td class="tnum" data-label="Cliente">${esc(d.cliente_doc || "—")}</td>
+      <td class="tnum" data-label="Cliente">${esc(d.cliente_doc || "—")}${d.cliente_nombre ? `<span class="doc-type">${esc(d.cliente_nombre)}</span>` : ""}</td>
       <td class="num" data-label="Total">${fmtMoney(d.importe_total, d.moneda)}</td>
       <td class="c-state">${badge(d.estado)}</td>
       <td class="c-reply"><div class="reply" title="${esc(msg)}">${code ? `<span class="reply-code">${esc(code)}</span>` : ""}<span class="reply-text">${esc(msg || (code ? "" : "—"))}</span></div></td>
@@ -299,6 +299,7 @@ async function loadRows({ silent = false } = {}) {
     $("prev").disabled = state.page <= 1;
     $("next").disabled = to >= data.total;
     $("export").href = `/api/export.csv?${queryString()}`;
+    $("export-xlsx").href = `/api/export.xlsx?${queryString()}`;
     state.lastLoad = new Date().toISOString();
     tickRefreshed();
   } catch (err) {
@@ -413,7 +414,8 @@ function renderDrawer(d, live) {
         <div><dt>Emisión</dt><dd>${fmtDate(d.fecha_emision)}</dd></div>
         ${d.fecha_emision_original ? `<div><dt>Emisión original (TXT)</dt><dd>${fmtDate(d.fecha_emision_original)}</dd></div>` : ""}
         <div><dt>Total</dt><dd>${fmtMoney(d.importe_total, d.moneda)}</dd></div>
-        <div><dt>Cliente</dt><dd>${esc(d.cliente_doc || "—")}</dd></div>
+        <div><dt>Cliente</dt><dd>${esc(d.cliente_nombre || "—")}<br>${esc({ "1": "DNI", "6": "RUC", "4": "CE", "7": "Pasaporte" }[d.cliente_tipo_doc] || "Doc.")} ${esc(d.cliente_doc || "—")}</dd></div>
+        ${d.referencia ? `<div><dt>Modifica a</dt><dd>${esc(d.referencia)}</dd></div>` : ""}
         <div><dt>Intentos de envío</dt><dd>${d.intentos_envio}</dd></div>
         <div><dt>Enviado a Sovos</dt><dd>${fmtDateTime(d.enviado_en)}</dd></div>
         <div><dt>Respuesta Sovos</dt><dd>${esc(SOVOS_CODES[d.codigo_sovos] || d.codigo_sovos || "—")}</dd></div>

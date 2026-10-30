@@ -60,6 +60,7 @@ def _parser() -> argparse.ArgumentParser:
     rp = sub.add_parser("report", help="resumen del día en CSV")
     rp.add_argument("--date", default=date.today().isoformat(), help="AAAA-MM-DD (por defecto hoy)")
     sub.add_parser("ui", help="abrir solo el panel web (estados, reintentos, consulta a Sovos)")
+    sub.add_parser("completar-clientes", help="completar documento y nombre del cliente desde los TXT")
     ru = sub.add_parser("reubicar", help="ajustar las rutas guardadas en la base al trasladarla a otra PC")
     ru.add_argument("--desde", required=True, help="WORK_DIR que tenía la PC de origen")
     ce = sub.add_parser("certificado", help="mostrar serie y vigencia de un certificado .pfx/.p12")
@@ -110,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args, s: Settings, db: Database) -> int:
+    if args.cmd == "completar-clientes":
+        from sovos_bridge.service.operations import completar_clientes
+        hechos, faltan = completar_clientes(db)
+        print(f"Clientes completados: {hechos}" + (f" (sin TXT legible: {faltan})" if faltan else ""))
+        return 0
+
     if args.cmd == "reubicar":
         n = db.relocate(args.desde, s.work_dir.resolve())
         print(f"Rutas actualizadas: {n} (de {args.desde} a {s.work_dir.resolve()})")

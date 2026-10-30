@@ -26,7 +26,6 @@ from typing import Any
 from lxml import etree
 
 from sovos_bridge.config import Settings
-from sovos_bridge.logging_setup import mask_doc
 from sovos_bridge.parser import parse_filename, parse_text
 from sovos_bridge.parser.models import Document, dec
 from sovos_bridge.parser.tokenizer import decode_bytes
@@ -176,7 +175,10 @@ class Resumenes:
         for r, d in tramo:
             self.db.reserve(d.clave, tipo=d.tipo_comprobante, serie_numero=d.serie_numero, archivo=r["archivo"],
                             fecha_emision=d.fecha_emision, moneda=d.moneda, importe_total=d.importe_total,
-                            cliente_doc=mask_doc(d.cliente.numero_documento))
+                            cliente_doc=d.cliente.numero_documento)
+            self.db.update_fields(d.clave, cliente_tipo_doc=d.cliente.tipo_documento,
+                                  cliente_nombre=d.cliente.razon_social,
+                                  referencia=d.referencia.serie_numero if d.referencia else None)
             if r["fecha_nueva"]:
                 self.db.update_fields(d.clave, fecha_emision_original=r["fecha_emision"])
             self.db.set_state(d.clave, Estado.EN_RESUMEN, f"Incluido en el resumen diario {rid.id}",

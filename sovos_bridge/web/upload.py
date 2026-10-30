@@ -23,7 +23,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from sovos_bridge.config import Settings
-from sovos_bridge.logging_setup import mask_doc
 from sovos_bridge.parser import ParseError, parse_filename, parse_text, standard_name
 from sovos_bridge.parser.tokenizer import decode_bytes
 from sovos_bridge.service import bandeja as bj
@@ -136,7 +135,7 @@ def _check_one(s: Settings, db: Database, nombre: str, contenido, en_cola: set[s
         c.mensajes.append(str(exc))
         return c
     c.fecha_emision, c.importe_total, c.moneda = doc.fecha_emision, doc.importe_total, doc.moneda
-    c.cliente_doc = mask_doc(doc.cliente.numero_documento)
+    c.cliente_doc = doc.cliente.numero_documento
     c._doc = doc            # para guardarlo en la bandeja; no viaja al panel
     v = validate(doc, info, s.emisor_ruc)
     if not v.ok:

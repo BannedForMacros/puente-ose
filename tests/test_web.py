@@ -77,7 +77,7 @@ def test_lista_filtra_ordena_y_no_acepta_columnas_arbitrarias(settings, db, fake
     r = app.documents({"sort": "estado; DROP TABLE documentos", "per_page": "9999"})
     assert r["total"] == 1 and r["per_page"] == 200
     item = r["items"][0]
-    assert item["cliente_doc"].startswith("****") and item["reintento"] is None
+    assert item["cliente_doc"].isdigit() and item["reintento"] is None      # documento completo
 
 
 def test_detalle_trae_historial_y_tipo_de_reintento(settings, db, fake):
@@ -207,7 +207,7 @@ def test_carga_revisa_sin_tocar_la_bandeja(settings, db):
     ]})
     res = {a["nombre"]: a for a in r["archivos"]}
     ok = res["100-175-20437310841-300-" + BOLETA_TXT.name]
-    assert ok["encolable"] and ok["nombre_final"] == BOLETA_TXT.name and ok["cliente_doc"].startswith("****")
+    assert ok["encolable"] and ok["nombre_final"] == BOLETA_TXT.name and ok["cliente_doc"].isdigit()
     assert ok["resultado"] in ("valido", "advertencia")
     assert res["20437310841-03-BT05-00000009.txt"]["resultado"] == "error"
     assert res["factura.txt"]["resultado"] == "error"
@@ -315,3 +315,35 @@ def test_constancia_por_http(server):
     csv_r = http.get(f"/api/cargas/{cid}.csv")
     assert csv_r.status_code == 200 and "attachment" in csv_r.headers["Content-Disposition"]
     assert http.get("/api/cargas/999.csv").status_code == 404
+
+
+def test_excel_respeta_filtros_y_trae_trazabilidad(settings, db, fake):
+    import io, zipfile, re as _re
+    enviar(settings, db, fake)
+    db.update_fields(K, fecha_emision="2026-10-28", fecha_emision_original="2026-10-17",
+                     cliente_nombre="PACIENTE UNO", cliente_tipo_doc="1")
+    db.set_state(K, Estado.APROBADO, "ok", codigo_sunat="Authorized", mensaje="Aceptado")
+    app = PanelApp(settings, db, None)
+    data = app.export_xlsx({})
+    z = zipfile.ZipFile(io.BytesIO(data))
+    hoja = z.read("xl/worksheets/sheet1.xml").decode()
+    assert '<autoFilter ref="A1:U2"/>' in hoja and 'state="frozen"' in hoja
+    textos = _re.findall(r"<t xml:space=\"preserve\">([^<]*)</t>", hoja)
+    assert "Fecha de emisión real (TXT)" in textos and "Fecha de emisión enviada a SUNAT" in textos
+    assert {"Aceptado", "Sí", "PACIENTE UNO", "DNI", "BT05-00125304"} <= set(textos)
+    # fechas como fechas de Excel: 17/10/2026 = 46312, 28/10/2026 = 46323
+    assert "<v>46312.0</v>" in hoja and "<v>46323.0</v>" in hoja
+    resumen = z.read("xl/worksheets/sheet2.xml").decode()
+    assert "17/10/2026" in resumen and "28/10/2026" in resumen
+    # con filtro que no coincide, la hoja queda solo con encabezados
+    vacio = zipfile.ZipFile(io.BytesIO(app.export_xlsx({"tipo": "01"}))).read("xl/worksheets/sheet1.xml").decode()
+    assert "BT05-00125304" not in vacio
+
+
+def test_completar_clientes_desde_el_txt(settings, db, fake):
+    from sovos_bridge.service.operations import completar_clientes
+    enviar(settings, db, fake)
+    db.update_fields(K, cliente_doc="******78", cliente_nombre=None)
+    assert completar_clientes(db) == (1, 0)
+    row = db.get(K)
+    assert "*" not in row["cliente_doc"] and row["cliente_nombre"]

@@ -178,9 +178,15 @@ class Database:
     def _migrate(self) -> None:
         """Columnas agregadas después de la primera versión (bases ya existentes)."""
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(documentos)")}
-        if "fecha_emision_original" not in cols:
+        nuevas = {
             # Trazabilidad: fecha del TXT cuando se envió con una fecha nueva asignada en la bandeja.
-            self._conn.execute("ALTER TABLE documentos ADD COLUMN fecha_emision_original TEXT")
+            "fecha_emision_original": "TEXT",
+            # Cliente completo (para el reporte de contabilidad) y comprobante que modifica una nota.
+            "cliente_tipo_doc": "TEXT", "cliente_nombre": "TEXT", "referencia": "TEXT",
+        }
+        for col, tipo in nuevas.items():
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE documentos ADD COLUMN {col} {tipo}")
 
     def close(self) -> None:
         with self._lock:

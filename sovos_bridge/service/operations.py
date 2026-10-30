@@ -96,3 +96,31 @@ def daily_report(s: Settings, db: Database, day: str) -> tuple[Path, Counter]:
         for r in rows:
             w.writerow([r[c] if r[c] is not None else "" for c in REPORT_COLUMNS])
     return path, Counter(r["estado"] for r in rows)
+
+
+def completar_clientes(db: Database) -> tuple[int, int]:
+    """Completa cliente (documento completo, tipo y nombre) y referencia de notas leyendo cada TXT.
+
+    Para comprobantes guardados cuando la base enmascaraba el documento del cliente.
+    Devuelve (actualizados, sin TXT legible).
+    """
+    from sovos_bridge.parser import ParseError, parse_file, parse_filename
+
+    hechos = faltan = 0
+    for row in db.search(per_page=1_000_000)[0]:
+        if row["tipo"] == "RC" or (row["cliente_nombre"] and "*" not in (row["cliente_doc"] or "")):
+            continue
+        path = Path(row["archivo"] or "")
+        if not path.is_file():
+            faltan += 1
+            continue
+        try:
+            doc = parse_file(path, parse_filename(path.name))
+        except (ParseError, OSError, ValueError):
+            faltan += 1
+            continue
+        db.update_fields(row["clave"], cliente_doc=doc.cliente.numero_documento,
+                         cliente_tipo_doc=doc.cliente.tipo_documento, cliente_nombre=doc.cliente.razon_social,
+                         referencia=doc.referencia.serie_numero if doc.referencia else None)
+        hechos += 1
+    return hechos, faltan
