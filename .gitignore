@@ -8,3 +8,4 @@ work/
 *.egg-info/
 deploy/cache/
 dist/
+respaldos/
