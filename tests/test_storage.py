@@ -73,3 +73,17 @@ def test_notificaciones(db):
     assert db.unacked_notifications() == ["n1"]
     db.mark_acked(["n1"])
     assert db.unacked_notifications() == []
+
+
+def test_reubicar_rutas_de_otra_pc(tmp_path):
+    from sovos_bridge.storage import Database
+    db = Database(tmp_path / "db.sqlite")
+    db.reserve(K, tipo="03", serie_numero="BT05-00125304", archivo="/Users/x/work/processed/a.txt")
+    db.update_fields(K, xml_path="/Users/x/work/output/2026/10/a.xml", pdf_path="/otro/lugar/a.pdf")
+    nuevo = tmp_path / "srv" / "work"
+    assert db.relocate("/Users/x/work", nuevo) == 2
+    row = db.get(K)
+    assert row["archivo"] == str(nuevo / "processed" / "a.txt")
+    assert row["xml_path"] == str(nuevo / "output" / "2026" / "10" / "a.xml")
+    assert row["pdf_path"] == "/otro/lugar/a.pdf"           # fuera de la carpeta de trabajo: no se toca
+    assert db.relocate("/Users/x/work", nuevo) == 0          # repetirlo no cambia nada

@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterator
 
 
@@ -440,3 +440,25 @@ class Database:
     def unstage(self, clave: str) -> None:
         with self._tx() as c:
             c.execute("DELETE FROM bandeja WHERE clave=?", (clave,))
+
+    # --- traslado a otro equipo ---------------------------------------------
+    _PATH_COLUMNS = {"documentos": ("archivo", "sbd_path", "xml_path", "pdf_path"), "bandeja": ("archivo",)}
+
+    def relocate(self, old_root: str, new_root: Path) -> int:
+        """Cambia las rutas guardadas de `old_root` (p. ej. la carpeta de trabajo de otra PC,
+        en formato Mac/Linux o Windows) a `new_root`. Devuelve cuántas rutas cambió."""
+        flavour = PureWindowsPath if "\\" in old_root or old_root[1:3] == ":\\" else PurePosixPath
+        old = flavour(old_root)
+        changed = 0
+        with self._tx() as c:
+            for table, cols in self._PATH_COLUMNS.items():
+                for col in cols:
+                    rows = c.execute(f"SELECT rowid, {col} FROM {table} WHERE {col} IS NOT NULL AND {col}<>''")
+                    for rowid, value in rows.fetchall():
+                        try:
+                            rel = flavour(value).relative_to(old)
+                        except ValueError:
+                            continue
+                        c.execute(f"UPDATE {table} SET {col}=? WHERE rowid=?", (str(new_root.joinpath(*rel.parts)), rowid))
+                        changed += 1
+        return changed

@@ -19,7 +19,19 @@ escritas.
 - Acceso HTTPS a la URL de Sovos
 - Lectura/escritura sobre la carpeta donde el sistema Java deja los TXT
 
-## Instalación en Windows (servicio con NSSM)
+## Instalación en Windows (paquete con instalador)
+
+Forma recomendada: desde la PC donde ya funciona el puente, ejecutar
+`DETENER=si deploy/empaquetar.sh`. Genera `dist/PuenteSovos_AAAAMMDD_HHMM.zip`
+con Python portátil, el puente, NSSM, la base de datos con lo ya procesado, la
+bandeja, el certificado y la configuración. En el servidor: descomprimir y doble
+clic en `INSTALAR.cmd` (ver `LEEME.txt` dentro del ZIP). Deja el servicio
+`SovosBridge` con inicio automático y ajusta las rutas de la base
+(`python -m sovos_bridge reubicar --desde <WORK_DIR anterior>`).
+
+El ZIP lleva el certificado y las claves: copiarlo por USB y borrarlo después.
+
+### Instalación manual (servicio con NSSM)
 
 1. **Python**: instalar Python 3.12 (64 bits) desde python.org marcando
    *Add python.exe to PATH*.

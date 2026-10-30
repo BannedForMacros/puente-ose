@@ -7,6 +7,7 @@
   python -m sovos_bridge report --date AAAA-MM-DD   resumen del día en CSV
   python -m sovos_bridge ui                      solo el panel web (sin procesar la bandeja)
   python -m sovos_bridge certificado <archivo.pfx>  datos del certificado (pide la clave sin mostrarla)
+  python -m sovos_bridge reubicar --desde <ruta>  ajusta las rutas de la base traída de otra PC
 """
 
 from __future__ import annotations
@@ -58,6 +59,8 @@ def _parser() -> argparse.ArgumentParser:
     rp = sub.add_parser("report", help="resumen del día en CSV")
     rp.add_argument("--date", default=date.today().isoformat(), help="AAAA-MM-DD (por defecto hoy)")
     sub.add_parser("ui", help="abrir solo el panel web (estados, reintentos, consulta a Sovos)")
+    ru = sub.add_parser("reubicar", help="ajustar las rutas guardadas en la base al trasladarla a otra PC")
+    ru.add_argument("--desde", required=True, help="WORK_DIR que tenía la PC de origen")
     ce = sub.add_parser("certificado", help="mostrar serie y vigencia de un certificado .pfx/.p12")
     ce.add_argument("archivo", type=Path)
     ce.add_argument("--legacy", type=Path, metavar="SALIDA.pfx",
@@ -106,6 +109,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args, s: Settings, db: Database) -> int:
+    if args.cmd == "reubicar":
+        n = db.relocate(args.desde, s.work_dir.resolve())
+        print(f"Rutas actualizadas: {n} (de {args.desde} a {s.work_dir.resolve()})")
+        return 0
+
     if args.cmd == "status":
         print(status_text(db, args.serie_numero))
         if args.consultar:

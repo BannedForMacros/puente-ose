@@ -6,3 +6,5 @@ __pycache__/
 work/
 *.db
 *.egg-info/
+deploy/cache/
+dist/
