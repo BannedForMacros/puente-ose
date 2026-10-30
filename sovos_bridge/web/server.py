@@ -417,6 +417,7 @@ class PanelApp:
         return {
             "clave": r["clave"], "tipo": r["tipo"], "serie_numero": r["serie_numero"],
             "estado": r["estado"], "document_id": r["document_id"], "fecha_emision": r["fecha_emision"],
+            "fecha_emision_original": r["fecha_emision_original"],
             "moneda": r["moneda"], "importe_total": r["importe_total"], "cliente_doc": r["cliente_doc"],
             "enviado_en": r["enviado_en"], "envio_incierto": bool(r["envio_incierto"]),
             "intentos_envio": r["intentos_envio"], "codigo_sovos": r["codigo_sovos"],

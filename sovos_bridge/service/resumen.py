@@ -177,6 +177,8 @@ class Resumenes:
             self.db.reserve(d.clave, tipo=d.tipo_comprobante, serie_numero=d.serie_numero, archivo=r["archivo"],
                             fecha_emision=d.fecha_emision, moneda=d.moneda, importe_total=d.importe_total,
                             cliente_doc=mask_doc(d.cliente.numero_documento))
+            if r["fecha_nueva"]:
+                self.db.update_fields(d.clave, fecha_emision_original=r["fecha_emision"])
             self.db.set_state(d.clave, Estado.EN_RESUMEN, f"Incluido en el resumen diario {rid.id}",
                               mensaje=f"En el resumen diario {rid.id}; esperando a SUNAT", document_id=document_id)
             self.db.update_staged(d.clave, estado="EN_RESUMEN", liberado_por=usuario,

@@ -238,7 +238,9 @@ function rowHtml(d) {
   return `
     <tr tabindex="0" data-clave="${esc(d.clave)}">
       <td class="c-doc"><span class="doc-id">${esc(d.serie_numero)}</span><span class="doc-type">${esc(tipoLabel(d.tipo))}</span></td>
-      <td class="tnum" data-label="Emisión">${fmtDate(d.fecha_emision)}</td>
+      <td class="tnum" data-label="Emisión">${d.fecha_emision_original
+        ? `<span class="date-old" title="Fecha del TXT original">${fmtDate(d.fecha_emision_original)}</span>${fmtDate(d.fecha_emision)}`
+        : fmtDate(d.fecha_emision)}</td>
       <td class="tnum" data-label="Cliente">${esc(d.cliente_doc || "—")}</td>
       <td class="num" data-label="Total">${fmtMoney(d.importe_total, d.moneda)}</td>
       <td class="c-state">${badge(d.estado)}</td>
@@ -409,6 +411,7 @@ function renderDrawer(d, live) {
       <h3>Datos</h3>
       <dl class="facts">
         <div><dt>Emisión</dt><dd>${fmtDate(d.fecha_emision)}</dd></div>
+        ${d.fecha_emision_original ? `<div><dt>Emisión original (TXT)</dt><dd>${fmtDate(d.fecha_emision_original)}</dd></div>` : ""}
         <div><dt>Total</dt><dd>${fmtMoney(d.importe_total, d.moneda)}</dd></div>
         <div><dt>Cliente</dt><dd>${esc(d.cliente_doc || "—")}</dd></div>
         <div><dt>Intentos de envío</dt><dd>${d.intentos_envio}</dd></div>

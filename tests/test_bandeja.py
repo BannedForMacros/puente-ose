@@ -136,3 +136,17 @@ def test_acciones_por_panel_exigen_responsable(settings, db):
         app.bandeja_action("separar", {"claves": [BOLETA]}, "")
     assert app.bandeja_action("separar", {"claves": [BOLETA], "responsable": "Ana"}, "")["hechos"] == [BOLETA]
     assert app.bandeja()["filas"][0]["grupo"] == "separado"
+
+
+def test_fecha_original_queda_registrada_al_enviar(settings, db, fake):
+    from conftest import accepted
+    from sovos_bridge.service.pipeline import Pipeline
+    settings.boletas_por_resumen = False
+    add(settings, db, FACTURA_TXT.name, FACTURA_TXT.read_bytes())
+    tray = Bandeja(settings, db)
+    tray.assign_date([FACTURA], "2026-06-09", "Ana", hoy=HOY)
+    tray.release([FACTURA], "Ana", hoy=HOY)
+    fake.queue("POST", "/v1/documents", accepted("doc-1"))
+    Pipeline(settings, db, fake.client()).process(settings.inbox_dir / FACTURA_TXT.name)
+    row = db.get(FACTURA)
+    assert row["fecha_emision"] == "2026-06-09" and row["fecha_emision_original"] == "2026-06-03"

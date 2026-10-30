@@ -173,6 +173,14 @@ class Database:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=FULL")
             self._conn.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Columnas agregadas después de la primera versión (bases ya existentes)."""
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(documentos)")}
+        if "fecha_emision_original" not in cols:
+            # Trazabilidad: fecha del TXT cuando se envió con una fecha nueva asignada en la bandeja.
+            self._conn.execute("ALTER TABLE documentos ADD COLUMN fecha_emision_original TEXT")
 
     def close(self) -> None:
         with self._lock:

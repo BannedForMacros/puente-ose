@@ -131,7 +131,8 @@ class Pipeline:
         if not self.s.dry_run:
             self.db.update_fields(clave, fecha_emision=doc.fecha_emision, moneda=doc.moneda,
                                   importe_total=doc.importe_total,
-                                  cliente_doc=mask_doc(doc.cliente.numero_documento))
+                                  cliente_doc=mask_doc(doc.cliente.numero_documento),
+                                  fecha_emision_original=self._fecha_original(clave, doc.fecha_emision))
 
         # --- SBD -------------------------------------------------------------
         try:
@@ -171,6 +172,13 @@ class Pipeline:
         self.db.mark_sent(clave, document_id)
         log.info("%s enviado a Sovos, documentId=%s", clave, document_id)
         return Result(Estado.ENVIADO, clave, document_id, work)
+
+    def _fecha_original(self, clave: str, fecha: str) -> str | None:
+        """Si la bandeja le asignó una fecha nueva, la del TXT original queda registrada."""
+        staged = self.db.staged_one(clave)
+        if staged is not None and staged["fecha_nueva"] == fecha and staged["fecha_emision"] != fecha:
+            return staged["fecha_emision"]
+        return None
 
     # ------------------------------------------------------------------------
     def _build(self, doc, clave: str):

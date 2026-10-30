@@ -14,7 +14,7 @@ from sovos_bridge.storage import Database, Estado, now_iso
 log = logging.getLogger(__name__)
 
 REPORT_COLUMNS = [
-    "clave", "tipo", "serie_numero", "estado", "fecha_emision", "moneda", "importe_total",
+    "clave", "tipo", "serie_numero", "estado", "fecha_emision", "fecha_emision_original", "moneda", "importe_total",
     "document_id", "codigo_sovos", "codigo_sunat", "mensaje", "enviado_en", "creado_en", "actualizado_en",
 ]
 
