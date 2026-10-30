@@ -79,6 +79,7 @@ class StatusPoller:
 
         notifs = _current_attempt(notifs, row["enviado_en"])
         when = _issue_month(row)
+        cdr_path = files.month_dir(self.s.output_dir, when) / f"R-{clave}.xml"
         xml_path, pdf_path = row["xml_path"], row["pdf_path"]
         approved = rejected = None
         completed = False
@@ -89,6 +90,13 @@ class StatusPoller:
             # adjuntos ya se guardaron, pero sus códigos cuentan para decidir.
             if nueva or not (xml_path and pdf_path):
                 for att in n.attachments:
+                    # Sovos repite los mismos adjuntos en cada aviso (hasta ~20 descargas por
+                    # comprobante): lo que ya se tiene no se vuelve a bajar.
+                    # Los enlaces no traen extensión: el tipo se sabe recién al bajarlo.
+                    if xml_path and pdf_path and cdr_path.exists():
+                        break
+                    if att.kind == "pdf" and pdf_path:
+                        continue
                     saved = self._save_attachment(clave, att, when)
                     if saved and saved.suffix == ".pdf":
                         pdf_path = str(saved)
