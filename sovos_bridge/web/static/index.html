@@ -184,11 +184,20 @@
             <option value="nota">Notas</option>
           </select>
         </label>
+        <label class="field">
+          <span class="field-label">Emitidos desde</span>
+          <input id="tray-desde" type="date">
+        </label>
+        <label class="field">
+          <span class="field-label">hasta</span>
+          <input id="tray-hasta" type="date">
+        </label>
         <label class="search">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
           <span class="sr-only">Buscar en la bandeja</span>
           <input id="tray-q" type="search" placeholder="Buscar serie o número" autocomplete="off">
         </label>
+        <button class="btn btn-ghost" id="tray-clear" type="button" hidden>Limpiar filtros</button>
         <div class="toolbar-end pick-first">
           <label class="field field-inline">
             <span class="field-label">Seleccionar los primeros</span>
@@ -215,10 +224,10 @@
           <thead>
             <tr>
               <th scope="col" class="c-check"><input class="row-check" type="checkbox" id="tray-all" aria-label="Seleccionar todos los del filtro"></th>
-              <th scope="col">Comprobante</th>
-              <th scope="col">Emisión</th>
-              <th scope="col">Plazo SUNAT</th>
-              <th scope="col" class="num">Total</th>
+              <th scope="col"><button class="sort" type="button" data-tray-sort="serie_numero">Comprobante</button></th>
+              <th scope="col"><button class="sort" type="button" data-tray-sort="fecha_emision">Emisión</button></th>
+              <th scope="col"><button class="sort" type="button" data-tray-sort="dias_restantes">Plazo SUNAT</button></th>
+              <th scope="col" class="num"><button class="sort" type="button" data-tray-sort="importe_total">Total</button></th>
               <th scope="col">Situación</th>
             </tr>
           </thead>
@@ -229,6 +238,10 @@
 
       <footer class="pager">
         <span id="tray-range"></span>
+        <label class="field field-inline">
+          <span class="field-label">Por página</span>
+          <select id="tray-per-page"><option>25</option><option selected>50</option><option>100</option><option>200</option></select>
+        </label>
         <div class="pager-buttons">
           <button class="btn btn-ghost" id="tray-prev" type="button">Anterior</button>
           <button class="btn btn-ghost" id="tray-next" type="button">Siguiente</button>
@@ -258,6 +271,19 @@
             <option value="01">Factura</option>
             <option value="07">Nota de crédito</option>
             <option value="08">Nota de débito</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Estado</span>
+          <select id="estado">
+            <option value="">Todos</option>
+            <option value="recibido">Recibidos</option>
+            <option value="sovos">En Sovos</option>
+            <option value="aprobado">Aprobados</option>
+            <option value="rechazado">Rechazados</option>
+            <option value="conexion">Errores de envío</option>
+            <option value="validacion">Errores de validación</option>
+            <option value="duplicado">Duplicados</option>
           </select>
         </label>
         <label class="field">
@@ -365,7 +391,14 @@
 
       <div class="upload-results" id="upload-results" hidden>
         <div class="receipt" id="receipt" hidden></div>
-        <div class="upload-summary" id="upload-summary"></div>
+        <div class="upload-tools">
+          <div class="chips" id="upload-chips" role="tablist" aria-label="Filtrar por resultado"></div>
+          <label class="search upload-search">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
+            <span class="sr-only">Buscar en la revisión</span>
+            <input id="upload-q" type="search" placeholder="Buscar serie o archivo" autocomplete="off">
+          </label>
+        </div>
         <div class="upload-table-wrap" id="upload-table-wrap">
           <table class="grid grid-compact">
             <thead>
@@ -380,6 +413,14 @@
             </thead>
             <tbody id="upload-rows"></tbody>
           </table>
+          <p class="upload-empty" id="upload-empty" hidden>Nada coincide con este filtro.</p>
+        </div>
+        <div class="pager upload-pager">
+          <span id="upload-range"></span>
+          <div class="pager-buttons">
+            <button class="btn btn-ghost btn-sm" id="upload-prev" type="button">Anterior</button>
+            <button class="btn btn-ghost btn-sm" id="upload-next" type="button">Siguiente</button>
+          </div>
         </div>
       </div>
 

@@ -317,13 +317,14 @@ function tickRefreshed() {
 }
 
 function syncSortHeaders() {
-  document.querySelectorAll("th").forEach((th) => th.removeAttribute("aria-sort"));
-  const btn = document.querySelector(`.sort[data-sort="${state.sort}"]`);
+  document.querySelectorAll("#view-docs th").forEach((th) => th.removeAttribute("aria-sort"));
+  const btn = document.querySelector(`#view-docs .sort[data-sort="${state.sort}"]`);
   if (btn) btn.closest("th").setAttribute("aria-sort", state.dir === "asc" ? "ascending" : "descending");
 }
 
 function syncFilterUi() {
   $("clear").hidden = !hasFilters();
+  $("estado").value = state.group;
   syncGroupButtons();
 }
 
@@ -571,7 +572,8 @@ const RESULTADOS = {
   en_cola:     { label: "Ya en cola",       tone: "idle", order: 4 },
   en_bandeja:  { label: "Ya en la bandeja", tone: "idle", order: 5 },
 };
-const upload = { files: [], results: [], done: false, busy: false, cargas: [], sent: new Set() };
+const upload = { files: [], results: [], done: false, busy: false, cargas: [], sent: new Set(),
+                 excluded: new Set(), filter: "todos", q: "", page: 1 };
 
 function pill(label, tone) { return `<span class="badge" data-tone="${tone}">${esc(label)}</span>`; }
 function plural(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
@@ -594,7 +596,9 @@ function closeUpload() {
   $("open-upload").focus();
 }
 function resetUpload() {
-  Object.assign(upload, { files: [], results: [], done: false, cargas: [], sent: new Set() });
+  Object.assign(upload, { files: [], results: [], done: false, cargas: [], sent: new Set(),
+                          excluded: new Set(), filter: "todos", q: "", page: 1 });
+  $("upload-q").value = "";
   $("upload-input").value = "";
   $("upload-more-input").value = "";
   $("upload-body").hidden = false;
@@ -763,36 +767,66 @@ function markRepeated(results) {
   return results;
 }
 
+// Filtros de la revisión: por resultado, y dos atajos útiles antes de pasar a la bandeja.
+const UPLOAD_PAGE = 100;
+const UPLOAD_EXTRA = {
+  fuera_plazo: { label: "Fuera de plazo", tone: "bad", match: (r) => r.encolable && r.fuera_plazo },
+  especiales: { label: "Inafecto, exonerado u otros", tone: "warn", match: (r) => r.encolable && r.especiales && r.especiales.length },
+};
+function uploadMatch(r) {
+  const f = upload.filter;
+  const okF = f === "todos" || (UPLOAD_EXTRA[f] ? UPLOAD_EXTRA[f].match(r) : r.resultado === f);
+  const q = upload.q.toUpperCase();
+  return okF && (!q || (r.serie_numero || "").toUpperCase().includes(q) || r.nombre.toUpperCase().includes(q));
+}
+function uploadFiltered() { return upload.results.filter(uploadMatch); }
+
 function renderUpload() {
   const res = [...upload.results].sort((a, b) => RESULTADOS[a.resultado].order - RESULTADOS[b.resultado].order);
   upload.results = res;
-  const counts = {};
+  const counts = { todos: res.length };
   res.forEach((r) => { counts[r.resultado] = (counts[r.resultado] || 0) + 1; });
-  const queued = upload.done ? res.filter((r) => r.encolable && upload.sent.has(r.nombre)).length : 0;
-  const fuera = res.filter((r) => r.encolable && r.fuera_plazo).length;
-  const especiales = res.filter((r) => r.encolable && r.especiales && r.especiales.length).length;
-  $("upload-summary").innerHTML = (upload.done ? pill(`En la bandeja: ${queued}`, "info") : pill(`${plural(res.length, "archivo", "archivos")}`, "idle"))
-    + Object.keys(RESULTADOS).filter((k) => counts[k])
-      .map((k) => pill(`${RESULTADOS[k].label}: ${counts[k]}`, RESULTADOS[k].tone)).join("")
-    + (!upload.done && fuera ? pill(`Fuera de plazo: ${fuera}`, "bad") : "")
-    + (!upload.done && especiales ? pill(`Inafecto, exonerado u otros: ${especiales}`, "warn") : "");
-  $("upload-rows").innerHTML = res.map((r, i) => {
+  const chips = [["todos", "Todos", "idle"], ...Object.keys(RESULTADOS).filter((k) => counts[k]).map((k) => [k, RESULTADOS[k].label, RESULTADOS[k].tone])];
+  if (!upload.done) {
+    Object.entries(UPLOAD_EXTRA).forEach(([k, x]) => {
+      counts[k] = res.filter(x.match).length;
+      if (counts[k]) chips.push([k, x.label, x.tone]);
+    });
+  }
+  if (!chips.some(([k]) => k === upload.filter)) upload.filter = "todos";
+  $("upload-chips").innerHTML = chips.map(([k, label, tone]) =>
+    `<button class="chip" type="button" role="tab" data-upload-chip="${k}" data-tone="${tone}" aria-selected="${upload.filter === k}">
+      ${esc(label)} <span class="chip-n">${(counts[k] || 0).toLocaleString("es-PE")}</span></button>`).join("");
+
+  const rows = uploadFiltered();
+  const pages = Math.max(1, Math.ceil(rows.length / UPLOAD_PAGE));
+  upload.page = Math.min(Math.max(upload.page, 1), pages);
+  const start = (upload.page - 1) * UPLOAD_PAGE;
+  const page = rows.slice(start, start + UPLOAD_PAGE);
+  $("upload-rows").innerHTML = page.map((r) => {
     const meta = RESULTADOS[r.resultado];
     const check = r.encolable && !upload.done
-      ? `<input class="row-check" type="checkbox" data-upload="${i}" checked aria-label="Incluir ${esc(r.nombre)}">` : "";
+      ? `<input class="row-check" type="checkbox" data-upload="${esc(r.nombre)}" ${upload.excluded.has(r.nombre) ? "" : "checked"} aria-label="Incluir ${esc(r.nombre)}">` : "";
     const emision = r.fecha_emision
       ? `${fmtDate(r.fecha_emision)}${r.dias_desde_emision > 0 ? `<span class="file-sub">hace ${r.dias_desde_emision} días</span>` : ""}` : "—";
     const enviado = upload.done && upload.sent.has(r.nombre) && r.encolable;
+    const separado = enviado && (r.mensajes[0] || "").startsWith("Separado");
     return `<tr>
       <td>${check}</td>
       <td><span class="file-name">${esc(r.serie_numero || r.nombre)}</span><span class="file-sub">${esc(r.serie_numero ? `${tipoLabel(r.tipo)}, ${r.nombre}` : "")}</span></td>
       <td class="tnum">${emision}</td>
       <td class="num">${r.importe_total ? fmtMoney(r.importe_total, r.moneda) : "—"}</td>
-      <td>${enviado ? pill(r.mensajes[0]?.startsWith("Separado") ? "Separado" : "En la bandeja", r.mensajes[0]?.startsWith("Separado") ? "warn" : "info") : pill(meta.label, meta.tone)}</td>
+      <td>${enviado ? pill(separado ? "Separado" : "En la bandeja", separado ? "warn" : "info") : pill(meta.label, meta.tone)}</td>
       <td><ul class="msgs">${(r.mensajes || []).map((m) => `<li>${esc(m)}</li>`).join("") || "<li>Sin observaciones</li>"}</ul></td>
     </tr>`;
   }).join("");
-  $("upload-all").hidden = upload.done || !res.some((r) => r.encolable);
+  $("upload-empty").hidden = rows.length > 0;
+  $("upload-range").textContent = rows.length
+    ? `${(start + 1).toLocaleString("es-PE")}–${(start + page.length).toLocaleString("es-PE")} de ${rows.length.toLocaleString("es-PE")}` : "";
+  $("upload-prev").disabled = upload.page <= 1;
+  $("upload-next").disabled = upload.page >= pages;
+  $("upload-prev").closest(".upload-pager").hidden = rows.length <= UPLOAD_PAGE;
+  $("upload-all").hidden = upload.done || !rows.some((r) => r.encolable);
   $("upload-results").hidden = false;
   $("upload-reset").hidden = false;
   $("upload-more").hidden = upload.done;
@@ -821,21 +855,23 @@ function renderReceipt() {
 }
 
 function selectedUploads() {
-  return [...document.querySelectorAll("[data-upload]:checked")].map((c) => upload.results[Number(c.dataset.upload)]);
+  return upload.results.filter((r) => r.encolable && !upload.excluded.has(r.nombre));
 }
 function syncUploadButton() {
   const btn = $("upload-send");
   const wrap = $("upload-separar-wrap");
   if (upload.done) { btn.disabled = false; btn.textContent = "Ir a la bandeja"; wrap.hidden = true; return; }
-  const total = document.querySelectorAll("[data-upload]").length;
   const chosen = selectedUploads();
   const n = chosen.length;
   const esp = chosen.filter((r) => r.especiales && r.especiales.length).length;
   wrap.hidden = esp === 0;
   $("upload-separar-text").textContent = `Separar ${esp === 1 ? "el que tiene" : `los ${esp} que tienen`} inafecto, exonerado, gratuito o exportación: no se envían hasta que lo indiques`;
+  // La casilla del encabezado refleja lo que se ve con el filtro actual
+  const visibles = uploadFiltered().filter((r) => r.encolable);
+  const marcados = visibles.filter((r) => !upload.excluded.has(r.nombre)).length;
   const all = $("upload-all");
-  all.checked = n > 0 && n === total;
-  all.indeterminate = n > 0 && n < total;
+  all.checked = visibles.length > 0 && marcados === visibles.length;
+  all.indeterminate = marcados > 0 && marcados < visibles.length;
   btn.disabled = n === 0 || upload.busy;
   btn.textContent = n ? `Pasar ${n.toLocaleString("es-PE")} a la bandeja` : "Nada para pasar";
 }
@@ -874,11 +910,27 @@ function bindUpload() {
   $("upload-input").addEventListener("change", (e) => handleFiles(e.target.files));
   $("upload-more-input").addEventListener("change", (e) => { handleFiles(e.target.files, { append: true }); e.target.value = ""; });
   $("upload-who").addEventListener("input", () => whoInvalid(false));
-  $("upload-rows").addEventListener("change", (e) => { if (e.target.matches("[data-upload]")) syncUploadButton(); });
-  $("upload-all").addEventListener("change", (e) => {
-    document.querySelectorAll("[data-upload]").forEach((c) => { c.checked = e.target.checked; });
+  $("upload-rows").addEventListener("change", (e) => {
+    const c = e.target.closest("[data-upload]");
+    if (!c) return;
+    if (c.checked) upload.excluded.delete(c.dataset.upload); else upload.excluded.add(c.dataset.upload);
     syncUploadButton();
   });
+  $("upload-all").addEventListener("change", (e) => {
+    uploadFiltered().filter((r) => r.encolable).forEach((r) => {
+      if (e.target.checked) upload.excluded.delete(r.nombre); else upload.excluded.add(r.nombre);
+    });
+    renderUpload();
+  });
+  $("upload-chips").addEventListener("click", (e) => {
+    const c = e.target.closest("[data-upload-chip]");
+    if (!c) return;
+    upload.filter = c.dataset.uploadChip; upload.page = 1;
+    renderUpload();
+  });
+  $("upload-q").addEventListener("input", debounce((e) => { upload.q = e.target.value.trim(); upload.page = 1; renderUpload(); }, 200));
+  $("upload-prev").addEventListener("click", () => { upload.page -= 1; renderUpload(); });
+  $("upload-next").addEventListener("click", () => { upload.page += 1; renderUpload(); });
   $("upload").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeUpload(); } });
   bindGlobalDrop();
 }
@@ -957,10 +1009,17 @@ function showView(view) {
 // --- bandeja de preparación -------------------------------------------------
 // Lo subido espera aquí: se separan especiales, se corrige la fecha de lo vencido
 // y se libera por tipo. Las notas esperan solas a que su comprobante esté aprobado.
-const TRAY_PAGE = 50;
 const tray = {
   rows: [], fechas: {}, plazos: {}, hoy: "", rechazados: 0, loaded: false,
-  chip: "todos", tipo: "", q: "", page: 1, selected: new Set(),
+  chip: "todos", tipo: "", q: "", desde: "", hasta: "", page: 1, perPage: 50,
+  sort: "fecha_emision", dir: "asc", selected: new Set(),
+};
+// Orden: por defecto el mismo en que se envían (fecha efectiva y serie).
+const TRAY_SORT = {
+  serie_numero: (r) => r.serie_numero,
+  fecha_emision: (r) => `${r.fecha_efectiva}|${r.serie_numero}`,
+  dias_restantes: (r) => r.dias_restantes,
+  importe_total: (r) => Number(r.importe_total) || 0,
 };
 const CHIPS = [
   { key: "todos", label: "Todos" },
@@ -1033,11 +1092,31 @@ function trayError(msg) {
     <button class="btn btn-secondary" type="button" data-tray-action="reload">Volver a cargar</button>`;
 }
 
+function trayHasFilters() { return !!(tray.chip !== "todos" || tray.tipo || tray.q || tray.desde || tray.hasta); }
+
 function trayFiltered() {
   const q = tray.q.toUpperCase();
+  const key = TRAY_SORT[tray.sort] || TRAY_SORT.fecha_emision;
+  const sign = tray.dir === "desc" ? -1 : 1;
   return tray.rows.filter((r) => (tray.chip === "todos" || r.grupo === tray.chip)
     && (!tray.tipo || (tray.tipo === "nota" ? isNota(r) : r.tipo === tray.tipo))
-    && (!q || r.serie_numero.includes(q)));
+    && (!q || r.serie_numero.includes(q))
+    && (!tray.desde || r.fecha_emision >= tray.desde)
+    && (!tray.hasta || r.fecha_emision <= tray.hasta))
+    .sort((a, b) => {
+      const x = key(a), y = key(b);
+      return (x < y ? -1 : x > y ? 1 : 0) * sign;
+    });
+}
+
+function syncTrayFilterUi() {
+  $("tray-clear").hidden = !trayHasFilters();
+  $("tray-tipo").value = tray.tipo;
+  $("tray-desde").value = tray.desde;
+  $("tray-hasta").value = tray.hasta;
+  document.querySelectorAll("#view-tray th").forEach((th) => th.removeAttribute("aria-sort"));
+  const b = document.querySelector(`[data-tray-sort="${tray.sort}"]`);
+  if (b) b.closest("th").setAttribute("aria-sort", tray.dir === "asc" ? "ascending" : "descending");
 }
 
 function renderTray() {
@@ -1151,11 +1230,12 @@ function situacionHtml(r) {
 }
 
 function renderTrayTable() {
+  syncTrayFilterUi();
   const rows = trayFiltered();
-  const pages = Math.max(1, Math.ceil(rows.length / TRAY_PAGE));
-  tray.page = Math.min(tray.page, pages);
-  const start = (tray.page - 1) * TRAY_PAGE;
-  const page = rows.slice(start, start + TRAY_PAGE);
+  const pages = Math.max(1, Math.ceil(rows.length / tray.perPage));
+  tray.page = Math.min(Math.max(tray.page, 1), pages);
+  const start = (tray.page - 1) * tray.perPage;
+  const page = rows.slice(start, start + tray.perPage);
   const st = $("tray-state");
   if (!rows.length) {
     $("tray-rows").innerHTML = "";
@@ -1337,9 +1417,9 @@ async function trayAction(act, btn) {
   const R = tray.rows;
   if (act === "reload") return loadTray();
   if (act === "upload") return openUpload();
-  if (act === "clear") { Object.assign(tray, { chip: "todos", tipo: "", q: "", page: 1 }); $("tray-tipo").value = ""; $("tray-q").value = ""; return renderTray(); }
-  if (act.startsWith("chip:")) { tray.chip = act.slice(5); tray.tipo = ""; $("tray-tipo").value = ""; tray.page = 1; return renderTray(); }
-  if (act === "sinref") { tray.chip = "listo"; tray.tipo = "nota"; $("tray-tipo").value = "nota"; tray.page = 1; return renderTray(); }
+  if (act === "clear") { clearTrayFilters(); return; }
+  if (act.startsWith("chip:")) { clearTrayFilters(false); tray.chip = act.slice(5); return renderTray(); }
+  if (act === "sinref") { clearTrayFilters(false); tray.chip = "listo"; tray.tipo = "nota"; return renderTray(); }
   if (act === "date-fuera") return openDateModal(R.filter((r) => r.grupo === "fuera_plazo"));
   if (act === "send-hoy") return releaseRows(R.filter((r) => r.grupo === "listo" && r.dias_restantes === 0), { title: "¿Enviar los que vencen hoy?", btn });
   if (act.startsWith("send-")) {
@@ -1386,7 +1466,23 @@ async function bulkAction(act, btn) {
   finally { busy(btn, false); }
 }
 
+function clearTrayFilters(render = true) {
+  Object.assign(tray, { chip: "todos", tipo: "", q: "", desde: "", hasta: "", page: 1 });
+  $("tray-q").value = "";
+  if (render) renderTray();
+}
+
 function bindTray() {
+  $("tray-desde").addEventListener("change", (e) => { tray.desde = e.target.value; tray.page = 1; renderTrayTable(); renderTrayChips(); });
+  $("tray-hasta").addEventListener("change", (e) => { tray.hasta = e.target.value; tray.page = 1; renderTrayTable(); renderTrayChips(); });
+  $("tray-clear").addEventListener("click", () => clearTrayFilters());
+  $("tray-per-page").addEventListener("change", (e) => { tray.perPage = Number(e.target.value); tray.page = 1; renderTrayTable(); });
+  document.querySelectorAll("[data-tray-sort]").forEach((b) => b.addEventListener("click", () => {
+    const col = b.dataset.traySort;
+    tray.dir = tray.sort === col && tray.dir === "asc" ? "desc" : "asc";
+    tray.sort = col; tray.page = 1;
+    renderTrayTable();
+  }));
   document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
   $("tray-who").addEventListener("input", () => $("tray-who-field").classList.remove("is-invalid"));
   $("tray-q").addEventListener("input", debounce((e) => { tray.q = e.target.value.trim(); tray.page = 1; renderTrayTable(); }, 200));
@@ -1621,6 +1717,7 @@ function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTi
 function bind() {
   $("q").addEventListener("input", debounce((e) => { state.q = e.target.value.trim(); reload(); }, 250));
   $("tipo").addEventListener("change", (e) => { state.tipo = e.target.value; reload(); });
+  $("estado").addEventListener("change", (e) => { state.group = e.target.value; reload(); });
   $("desde").addEventListener("change", (e) => { state.desde = e.target.value; reload(); });
   $("hasta").addEventListener("change", (e) => { state.hasta = e.target.value; reload(); });
   $("per-page").addEventListener("change", (e) => { state.perPage = Number(e.target.value); reload(); });
@@ -1631,7 +1728,7 @@ function bind() {
   $("drawer-close").addEventListener("click", closeDrawer);
   $("scrim").addEventListener("click", closeDrawer);
 
-  document.querySelectorAll(".sort").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#view-docs .sort").forEach((b) => b.addEventListener("click", () => {
     const col = b.dataset.sort;
     state.dir = state.sort === col && state.dir === "desc" ? "asc" : "desc";
     state.sort = col;

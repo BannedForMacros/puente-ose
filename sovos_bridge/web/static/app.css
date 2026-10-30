@@ -383,8 +383,15 @@ th[aria-sort="descending"] .sort::after { border-top-color: currentColor; margin
 .dropzone-title { font-weight: 600; }
 .dropzone-hint { color: var(--muted); font-size: var(--fs-sm); }
 .dropzone.is-busy { pointer-events: none; opacity: .7; }
-.upload-results { min-height: 0; display: grid; grid-template-rows: auto 1fr; border-top: 1px solid var(--line); }
-.upload-summary { display: flex; flex-wrap: wrap; gap: var(--s2); padding: var(--s3) var(--s5); }
+.upload-results { min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.upload-results .upload-table-wrap { flex: 1 1 auto; min-height: 0; }
+.upload-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); padding: var(--s3) var(--s5); }
+.upload-search { flex: 1 1 220px; max-width: 320px; margin-left: auto; }
+.upload-empty { margin: 0; padding: var(--s6) var(--s5); text-align: center; color: var(--muted); }
+.upload-pager { padding: var(--s2) var(--s5); border-top: 1px solid var(--line); }
+.chip[data-tone="bad"] .chip-n { color: var(--bad); }
+.chip[data-tone="warn"] .chip-n { color: var(--warn); }
+.chip[aria-selected="true"] .chip-n { color: inherit; }
 .upload-table-wrap { overflow: auto; max-height: 52vh; border-top: 1px solid var(--line); }
 .grid-compact td { padding: var(--s2) var(--s4); }
 .grid-compact tbody tr { cursor: default; }
