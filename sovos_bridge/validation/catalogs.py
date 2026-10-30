@@ -86,3 +86,6 @@ MOTIVO_ND = {
 
 # Catálogo 51 - Tipo de operación (los más comunes)
 TIPO_OPERACION = {"0101", "0102", "0104", "0112", "0113", "0200", "0401", "1001", "1002", "1003", "1004", "2001"}
+# Operaciones sujetas a detracción (1001 general, 1002 recursos hidrobiológicos,
+# 1003 transporte de pasajeros, 1004 transporte de carga)
+TIPO_OPERACION_DETRACCION = {"1001", "1002", "1003", "1004"}

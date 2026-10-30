@@ -27,6 +27,8 @@ _HORA = re.compile(r"^\d{2}:\d{2}:\d{2}$")
 
 TOLERANCIA_ITEM = Decimal("0.01")
 TOLERANCIA_TOTAL = Decimal("1.00")
+# Monto desde el que una factura de servicios gravados suele estar sujeta a detracción.
+MONTO_DETRACCION = Decimal("700")
 
 
 @dataclass
@@ -111,6 +113,21 @@ def validate(doc: Document, info: FileInfo, emisor_ruc: str) -> ValidationResult
             if ref.serie_numero[:1] != doc.serie[:1]:
                 w.append(f"La nota {doc.serie} referencia a {ref.serie_numero}: la letra de serie no coincide")
 
+    # --- detracción y forma de pago (facturas) ---------------------------
+    if doc.tipo_operacion in cat.TIPO_OPERACION_DETRACCION:
+        # SUNAT exige cuenta del Banco de la Nación, código de bien/servicio,
+        # porcentaje y monto; el TXT todavía no tiene esos campos identificados.
+        e.append(f"Factura con detracción (tipo de operación {doc.tipo_operacion}): el puente todavía no arma "
+                 "los datos de detracción. No se envía para que SUNAT no la rechace; avisar a TI con este TXT")
+    elif (doc.tipo_comprobante == "01" and dec(doc.importe_total) > MONTO_DETRACCION
+          and dec(doc.totales.get("1001")) > 0):
+        w.append(f"Factura gravada mayor a S/ {MONTO_DETRACCION} enviada sin detracción: "
+                 "confirmar que no corresponde")
+    if doc.tipo_comprobante == "01" and doc.fecha_vencimiento and _FECHA.match(doc.fecha_vencimiento) \
+            and doc.fecha_vencimiento > doc.fecha_emision:
+        w.append(f"Vence el {doc.fecha_vencimiento}, después de la emisión: se envía como pago al contado; "
+                 "si es al crédito faltan las cuotas")
+
     # --- tributos y catálogos (advertencias) ------------------------------
     for t in doc.tributos:
         if t.codigo not in cat.TRIBUTOS:
@@ -132,8 +149,10 @@ def validate(doc: Document, info: FileInfo, emisor_ruc: str) -> ValidationResult
                     w.append(f"Ítem {n}: IGV {t.monto} difiere de base x {t.porcentaje}% = {esperado}")
 
     # --- cuadres (advertencias; los montos se envían tal cual) ------------
-    suma_venta = sum((dec(i.valor_venta) for i in doc.items), Decimal(0))
-    suma_igv_items = sum((dec(i.total_impuestos) for i in doc.items), Decimal(0))
+    # Los ítems gratuitos no suman al valor de venta ni a los impuestos del comprobante.
+    onerosos = [i for i in doc.items if not any(t.afectacion in cat.AFECTACION_GRATUITA for t in i.tributos)]
+    suma_venta = sum((dec(i.valor_venta) for i in onerosos), Decimal(0))
+    suma_igv_items = sum((dec(i.total_impuestos) for i in onerosos), Decimal(0))
     valor_venta = sum((dec(doc.totales.get(c)) for c in ("1001", "1002", "1003", "1000")), Decimal(0))
     total_imp = dec(doc.total_impuestos)
     total = dec(doc.importe_total)
@@ -148,7 +167,7 @@ def validate(doc: Document, info: FileInfo, emisor_ruc: str) -> ValidationResult
             w.append(f"Descuadre: {a_name} ({a}) vs {b_name} ({b}), diferencia {diff}")
         elif diff:
             w.append(f"Redondeo: {a_name} ({a}) vs {b_name} ({b}), diferencia {diff}")
-    for it in doc.items:
+    for it in onerosos:
         q = dec(it.cantidad)
         diff = abs(dec(it.precio_unitario) * q - (dec(it.valor_venta) + dec(it.total_impuestos)))
         if diff >= Decimal("0.005"):
