@@ -212,7 +212,7 @@ svg { stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round
 .search { position: relative; flex: 1 1 280px; max-width: 420px; }
 .search svg { position: absolute; left: 12px; top: 50%; width: 16px; height: 16px; transform: translateY(-50%); color: var(--muted); }
 .search input[type="search"] { padding-left: 36px; }
-input[type="search"], input[type="date"], select {
+input[type="search"], input[type="date"], input[type="text"], select {
   width: 100%; min-height: 40px; padding: 0 var(--s3); border: 1px solid var(--line-strong);
   border-radius: var(--r-sm); background: var(--surface);
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
@@ -396,6 +396,56 @@ th[aria-sort="descending"] .sort::after { border-top-color: currentColor; margin
 .upload-foot { display: flex; align-items: center; gap: var(--s4); padding: var(--s4) var(--s5); border-top: 1px solid var(--line); }
 .upload-note { margin: 0 auto 0 0; color: var(--muted); font-size: var(--fs-sm); }
 .upload-note[data-tone="warn"] { color: var(--warn); }
+.upload-body { min-height: 0; overflow: auto; }
+.dropzone-progress { font-size: var(--fs-sm); color: var(--ink); font-variant-numeric: tabular-nums; }
+.upload-who { flex: 0 0 260px; }
+.upload-who .req { color: var(--muted); font-weight: 400; }
+.upload-who.is-invalid input { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-bg); }
+.field-error { color: var(--bad); font-size: var(--fs-xs); }
+.upload-results .row-check { display: block; }
+
+/* historial de cargas */
+.history { margin: 0 var(--s5) var(--s5); }
+.history h3 { margin: 0 0 var(--s2); font-size: var(--fs-sm); font-weight: 600; color: var(--muted); }
+.history-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.history-list li {
+  display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: var(--s4);
+  padding: var(--s2) var(--s4); border-top: 1px solid var(--line); font-size: var(--fs-sm);
+  animation: rise var(--t-med) var(--ease) both; animation-delay: calc(var(--i, 0) * 30ms);
+}
+.history-list li:first-child { border-top: 0; }
+.history-num { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
+.history-who { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-count { font-variant-numeric: tabular-nums; color: var(--muted); }
+.history a { color: var(--ink); font-weight: 550; text-decoration: none; }
+.history a:hover { text-decoration: underline; }
+
+/* constancia de la carga */
+.receipt {
+  margin: var(--s4) var(--s5) 0; padding: var(--s4); border-radius: var(--r-md);
+  background: var(--ok-bg); color: var(--text); display: flex; align-items: center; gap: var(--s4);
+  animation: rise var(--t-med) var(--ease) both;
+}
+.receipt svg { flex: none; width: 28px; height: 28px; color: var(--ok); }
+.receipt-text { display: grid; gap: 2px; margin-right: auto; }
+.receipt-text strong { font-size: var(--fs-md); }
+.receipt-text span { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+
+/* soltar archivos en cualquier parte del panel */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: var(--s5);
+  background: rgba(9, 28, 35, .55); opacity: 0; transition: opacity var(--t-fast) var(--ease); pointer-events: none;
+}
+.drop-overlay.is-on { opacity: 1; }
+.drop-overlay-card {
+  display: grid; justify-items: center; gap: var(--s2); padding: var(--s7) var(--s7); text-align: center;
+  border: 2px dashed var(--ink); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow-2);
+  transform: scale(.97); transition: transform var(--t-med) var(--ease);
+}
+.drop-overlay.is-on .drop-overlay-card { transform: none; }
+.drop-overlay svg { width: 44px; height: 44px; fill: none; stroke: var(--ink); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.drop-overlay strong { font-size: var(--fs-lg); }
+.drop-overlay span { color: var(--muted); }
 
 /* --- avisos ----------------------------------------------------------- */
 .toasts { position: fixed; right: var(--s5); bottom: var(--s5); z-index: 50; display: grid; gap: var(--s2); width: min(380px, calc(100vw - 32px)); }
@@ -431,6 +481,10 @@ th[aria-sort="descending"] .sort::after { border-top-color: currentColor; margin
   .topbar { padding: var(--s3) var(--s4); flex-wrap: wrap; gap: var(--s3); }
   .topbar-status { order: 3; width: 100%; }
   .upload-foot { flex-wrap: wrap; }
+  .upload-who { flex-basis: 100%; }
+  .history-list li { grid-template-columns: auto 1fr auto; }
+  .history-count { display: none; }
+  .receipt { flex-wrap: wrap; }
   .grid-compact td { padding: var(--s2) 0; }
   .page { padding: var(--s4); }
   .flow-track { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: var(--s5); padding: var(--s4); }

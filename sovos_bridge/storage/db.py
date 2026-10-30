@@ -84,6 +84,31 @@ CREATE TABLE IF NOT EXISTS notificaciones (
     confirmada       INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_notif_confirmada ON notificaciones(confirmada);
+
+-- Constancia de las cargas de TXT hechas desde el panel: quién, cuándo y qué archivo exacto.
+CREATE TABLE IF NOT EXISTS cargas (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT NOT NULL,
+    usuario    TEXT,
+    origen     TEXT,                              -- IP del equipo que subió
+    total      INTEGER NOT NULL,
+    encolados  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cargas_archivos (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    carga_id      INTEGER NOT NULL REFERENCES cargas(id),
+    nombre        TEXT NOT NULL,
+    nombre_final  TEXT,
+    clave         TEXT,
+    sha256        TEXT,
+    bytes         INTEGER,
+    encolado      INTEGER NOT NULL,
+    resultado     TEXT NOT NULL,
+    detalle       TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_cargas_archivos_carga ON cargas_archivos(carga_id);
+CREATE INDEX IF NOT EXISTS ix_cargas_archivos_sha ON cargas_archivos(sha256);
+CREATE INDEX IF NOT EXISTS ix_cargas_archivos_clave ON cargas_archivos(clave);
 """
 
 
@@ -319,3 +344,42 @@ class Database:
             return
         with self._tx() as c:
             c.executemany("UPDATE notificaciones SET confirmada=1 WHERE notification_id=?", [(i,) for i in ids])
+
+    # --- cargas desde el panel ----------------------------------------------
+    def save_upload(self, *, usuario: str, origen: str, archivos: list[dict[str, Any]]) -> int:
+        """Guarda la constancia de una carga y deja un evento en cada comprobante encolado."""
+        ts = now_iso()
+        encolados = sum(1 for a in archivos if a["encolado"])
+        with self._tx() as c:
+            carga_id = c.execute("INSERT INTO cargas (ts, usuario, origen, total, encolados) VALUES (?,?,?,?,?)",
+                                 (ts, usuario, origen, len(archivos), encolados)).lastrowid
+            c.executemany(
+                "INSERT INTO cargas_archivos (carga_id, nombre, nombre_final, clave, sha256, bytes, encolado,"
+                " resultado, detalle) VALUES (?,?,?,?,?,?,?,?,?)",
+                [(carga_id, a["nombre"], a.get("nombre_final"), a.get("clave") or None, a.get("sha256"),
+                  a.get("bytes"), int(a["encolado"]), a["resultado"], a.get("detalle", "")) for a in archivos])
+            for a in archivos:
+                if a["encolado"] and a.get("clave"):
+                    self._event(c, a["clave"], None,
+                                f"Subido desde el panel por {usuario} (carga N.º {carga_id}, archivo {a['nombre']})")
+        return carga_id
+
+    def uploads(self, limit: int = 20) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._conn.execute("SELECT * FROM cargas ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    def upload(self, carga_id: int) -> tuple[sqlite3.Row | None, list[sqlite3.Row]]:
+        with self._lock:
+            head = self._conn.execute("SELECT * FROM cargas WHERE id=?", (carga_id,)).fetchone()
+            files = self._conn.execute("SELECT * FROM cargas_archivos WHERE carga_id=? ORDER BY id",
+                                       (carga_id,)).fetchall()
+        return head, files
+
+    def last_upload_of(self, *, sha256: str = "", clave: str = "") -> sqlite3.Row | None:
+        """Última vez que se encoló este mismo archivo (por contenido) o este comprobante."""
+        col, val = ("sha256", sha256) if sha256 else ("clave", clave)
+        with self._lock:
+            return self._conn.execute(
+                f"SELECT a.*, c.ts, c.usuario FROM cargas_archivos a JOIN cargas c ON c.id=a.carga_id"
+                f" WHERE a.{col}=? AND a.encolado=1 ORDER BY a.id DESC LIMIT 1", (val,),
+            ).fetchone()

@@ -146,20 +146,29 @@
         </button>
       </header>
 
-      <label class="dropzone" id="dropzone">
-        <input type="file" id="upload-input" accept=".txt,text/plain" multiple>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-        <span class="dropzone-title">Arrastra aquí los TXT del sistema de facturación</span>
-        <span class="dropzone-hint">o haz clic para elegirlos. Hasta 500 por vez; también acepta nombres con prefijo.</span>
-      </label>
+      <div class="upload-body" id="upload-body">
+        <label class="dropzone" id="dropzone">
+          <input type="file" id="upload-input" accept=".txt,text/plain" multiple>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+          <span class="dropzone-title">Arrastra aquí los TXT o una carpeta completa</span>
+          <span class="dropzone-hint" id="dropzone-hint">o haz clic para elegirlos. Hasta 500 por vez; también acepta nombres con prefijo.</span>
+          <span class="dropzone-progress" id="dropzone-progress" hidden></span>
+        </label>
+
+        <section class="history" id="history" aria-labelledby="history-title" hidden>
+          <h3 id="history-title">Cargas anteriores</h3>
+          <ol class="history-list" id="history-list"></ol>
+        </section>
+      </div>
 
       <div class="upload-results" id="upload-results" hidden>
+        <div class="receipt" id="receipt" hidden></div>
         <div class="upload-summary" id="upload-summary"></div>
-        <div class="upload-table-wrap">
+        <div class="upload-table-wrap" id="upload-table-wrap">
           <table class="grid grid-compact">
             <thead>
               <tr>
-                <th scope="col"><span class="sr-only">Incluir</span></th>
+                <th scope="col"><input class="row-check" type="checkbox" id="upload-all" checked aria-label="Incluir todos"></th>
                 <th scope="col">Archivo</th>
                 <th scope="col">Emisión</th>
                 <th scope="col" class="num">Total</th>
@@ -173,12 +182,29 @@
       </div>
 
       <footer class="upload-foot">
+        <label class="field upload-who" id="upload-who-field">
+          <span class="field-label">Quién sube <span class="req">(queda en la constancia)</span></span>
+          <input type="text" id="upload-who" maxlength="80" autocomplete="name" placeholder="Nombre y apellido"
+                 aria-describedby="upload-who-error">
+          <span class="field-error" id="upload-who-error" hidden>Escribe tu nombre para registrar la carga</span>
+        </label>
         <p class="upload-note" id="upload-note"></p>
         <div class="modal-actions">
-          <button class="btn btn-ghost" id="upload-reset" type="button" hidden>Elegir otros</button>
+          <label class="btn btn-ghost" id="upload-more" hidden>
+            <input type="file" id="upload-more-input" accept=".txt,text/plain" multiple class="sr-only">Agregar más
+          </label>
+          <button class="btn btn-ghost" id="upload-reset" type="button" hidden>Empezar de nuevo</button>
           <button class="btn btn-primary" id="upload-send" type="button" disabled>Enviar a la bandeja</button>
         </div>
       </footer>
+    </div>
+  </div>
+
+  <div class="drop-overlay" id="drop-overlay" hidden aria-hidden="true">
+    <div class="drop-overlay-card">
+      <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+      <strong>Suelta para revisar los TXT</strong>
+      <span>Nada se envía a Sovos hasta que confirmes</span>
     </div>
   </div>
 

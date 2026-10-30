@@ -1,5 +1,6 @@
 """Panel web: consultas, acciones (mismas reglas que la CLI) y seguridad del servidor."""
 
+import hashlib
 import shutil
 
 import httpx
@@ -227,7 +228,7 @@ def test_carga_rechazado_se_puede_reenviar(settings, db, fake):
 
 def test_carga_encola_solo_los_validos_y_detecta_repetidos(settings, db):
     app = PanelApp(settings, db, None)
-    r = app.upload({"modo": "encolar", "archivos": [
+    r = app.upload({"modo": "encolar", "responsable": "Ana TI", "archivos": [
         archivo(BOLETA_TXT.name, BOLETA_TXT),
         archivo("copia-" + BOLETA_TXT.name, BOLETA_TXT),
         archivo("20437310841-03-BT05-00000009.txt", b"IDE|basura"),
@@ -247,3 +248,68 @@ def test_carga_por_http(server):
     r = http.post("/api/upload", json=body, headers={"X-Sovos-Panel": "1"})
     assert r.status_code == 200 and r.json()["encolables"] == 1
     assert http.post("/api/upload", json={"archivos": []}, headers={"X-Sovos-Panel": "1"}).status_code == 400
+
+
+def test_encolar_exige_responsable(settings, db):
+    with pytest.raises(PanelError):
+        PanelApp(settings, db, None).upload({"modo": "encolar", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]})
+    assert not list(settings.inbox_dir.glob("*"))
+
+
+def test_carga_deja_constancia(settings, db):
+    app = PanelApp(settings, db, None)
+    r = app.upload({"modo": "encolar", "responsable": "  Ana   TI ", "archivos": [
+        archivo(BOLETA_TXT.name, BOLETA_TXT), archivo("20437310841-03-BT05-00000009.txt", b"IDE|basura")]},
+        usuario="admin", origen="10.0.0.7")
+    c = r["carga"]
+    assert c["usuario"] == "Ana TI (acceso admin)" and c["origen"] == "10.0.0.7"
+    assert (c["total"], c["encolados"]) == (2, 1)
+    assert app.uploads()["cargas"][0]["id"] == c["id"]
+    name, data = app.upload_csv(c["id"])
+    text = data.decode("utf-8-sig")
+    assert name == f"constancia_carga_{c['id']:05d}.csv"
+    assert "Ana TI (acceso admin)" in text and "Dejado en la bandeja" in text and "No subido (error)" in text
+    assert hashlib.sha256(BOLETA_TXT.read_bytes()).hexdigest() in text
+    assert any("Subido desde el panel por Ana TI" in e["detalle"] for e in db.events(K))
+    with pytest.raises(PanelError):
+        app.upload_csv(9999)
+
+
+def test_mismo_archivo_subido_antes_se_avisa(settings, db):
+    app = PanelApp(settings, db, None)
+    app.upload({"modo": "encolar", "responsable": "Ana", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]})
+    for f in settings.inbox_dir.iterdir():      # el servicio ya lo tomó
+        f.unlink()
+    r = app.upload({"modo": "revisar", "archivos": [archivo("otro-nombre-" + BOLETA_TXT.name, BOLETA_TXT)]})
+    a = r["archivos"][0]
+    assert a["resultado"] == "advertencia"
+    assert any("Este mismo archivo ya se subió" in m and "por Ana" in m for m in a["mensajes"])
+
+
+def test_rechazado_identico_avisa_que_volvera_a_fallar(settings, db, fake):
+    rechazar(settings, db, fake)
+    a = PanelApp(settings, db, None).upload(
+        {"modo": "revisar", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]})["archivos"][0]
+    assert a["encolable"] and any("Es idéntico al archivo que terminó RECHAZADO" in m for m in a["mensajes"])
+
+
+def test_aprobado_con_contenido_distinto_no_se_reemite(settings, db, fake):
+    enviar(settings, db, fake)
+    db.set_state(K, Estado.APROBADO, "ok")
+    otro = BOLETA_TXT.read_bytes().replace(b"16:22:53", b"16:22:54")
+    a = PanelApp(settings, db, None).upload(
+        {"modo": "revisar", "archivos": [archivo(BOLETA_TXT.name, otro)]})["archivos"][0]
+    assert a["resultado"] == "ya_enviado"
+    assert any("distinto al del comprobante aprobado" in m for m in a["mensajes"])
+
+
+def test_constancia_por_http(server):
+    http, _ = server
+    h = {"X-Sovos-Panel": "1"}
+    r = http.post("/api/upload", json={"modo": "encolar", "responsable": "Ana",
+                                       "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]}, headers=h)
+    cid = r.json()["carga"]["id"]
+    assert http.get("/api/cargas").json()["cargas"][0]["id"] == cid
+    csv_r = http.get(f"/api/cargas/{cid}.csv")
+    assert csv_r.status_code == 200 and "attachment" in csv_r.headers["Content-Disposition"]
+    assert http.get("/api/cargas/999.csv").status_code == 404

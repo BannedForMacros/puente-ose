@@ -553,7 +553,11 @@ async function retryAll(btn) {
 }
 
 // --- carga masiva de TXT ---------------------------------------------------
+// Revisar no toca nada; al confirmar, el servidor deja los válidos en la bandeja
+// y guarda una constancia (quién, cuándo, desde qué equipo y la huella de cada archivo).
 const UPLOAD_CHUNK = 200;
+const MAX_UPLOAD = 500;
+const WHO_KEY = "puente.responsable";
 const RESULTADOS = {
   error:       { label: "Con error",        tone: "bad",  order: 0 },
   advertencia: { label: "Listo, con aviso", tone: "warn", order: 1 },
@@ -561,30 +565,42 @@ const RESULTADOS = {
   ya_enviado:  { label: "Ya enviado",       tone: "idle", order: 3 },
   en_cola:     { label: "Ya en la bandeja", tone: "idle", order: 4 },
 };
-const upload = { files: [], results: [], done: false, sent: new Set() };
+const upload = { files: [], results: [], done: false, busy: false, cargas: [], sent: new Set() };
 
 function pill(label, tone) { return `<span class="badge" data-tone="${tone}">${esc(label)}</span>`; }
+function plural(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
+function storedWho() { try { return localStorage.getItem(WHO_KEY) || ""; } catch { return ""; } }
+function rememberWho(v) { try { localStorage.setItem(WHO_KEY, v); } catch { /* sin almacenamiento */ } }
 
 function openUpload() {
   resetUpload();
   const layer = $("upload");
   layer.hidden = false;
   requestAnimationFrame(() => layer.classList.add("is-open"));
+  loadHistory();
   $("upload-input").focus();
 }
 function closeUpload() {
+  if (upload.busy) return;
   const layer = $("upload");
   layer.classList.remove("is-open");
   setTimeout(() => { layer.hidden = true; }, 160);
   $("open-upload").focus();
 }
 function resetUpload() {
-  upload.files = []; upload.results = []; upload.done = false; upload.sent = new Set();
+  Object.assign(upload, { files: [], results: [], done: false, cargas: [], sent: new Set() });
   $("upload-input").value = "";
-  $("dropzone").hidden = false;
+  $("upload-more-input").value = "";
+  $("upload-body").hidden = false;
   $("dropzone").classList.remove("is-busy");
+  $("dropzone-progress").hidden = true;
   $("upload-results").hidden = true;
+  $("receipt").hidden = true;
   $("upload-reset").hidden = true;
+  $("upload-more").hidden = true;
+  $("upload-who-field").hidden = false;
+  $("upload-who").value = $("upload-who").value || storedWho();
+  whoInvalid(false);
   $("upload-send").disabled = true;
   $("upload-send").textContent = "Enviar a la bandeja";
   $("upload-sub").textContent = "Se revisan antes de enviar: nada sale a Sovos hasta que confirmes.";
@@ -601,6 +617,27 @@ function serviceNote() {
     note.textContent = s ? `Al confirmar, el servicio los envía a Sovos (${s.ambiente}).` : "";
   }
 }
+function whoInvalid(on) {
+  $("upload-who-field").classList.toggle("is-invalid", on);
+  $("upload-who-error").hidden = !on;
+  $("upload-who").setAttribute("aria-invalid", on ? "true" : "false");
+}
+
+async function loadHistory() {
+  try {
+    const { cargas } = await api("/api/cargas");
+    const list = cargas.slice(0, 8);
+    $("history").hidden = !list.length;
+    $("history-list").innerHTML = list.map((c) => `<li>
+      <span class="history-num">N.º ${c.id}</span>
+      <span class="history-who">${esc(fmtDateTime(c.ts))}, ${esc(c.usuario)}</span>
+      <span class="history-count">${c.encolados} de ${plural(c.total, "archivo", "archivos")} a la bandeja</span>
+      <a href="/api/cargas/${c.id}.csv" download>Constancia</a>
+    </li>`).join("");
+    // Escalonado por CSSOM: la CSP del panel no permite atributos style en línea.
+    $("history-list").querySelectorAll("li").forEach((li, i) => li.style.setProperty("--i", i));
+  } catch { $("history").hidden = true; }
+}
 
 function readAsBase64(file) {
   return new Promise((resolve, reject) => {
@@ -611,32 +648,98 @@ function readAsBase64(file) {
   });
 }
 
-async function postChunks(modo, files) {
+// Archivos soltados, incluidas carpetas (se recorren completas).
+// Las entradas se piden en el mismo evento: después el navegador las descarta.
+async function droppedFiles(dt) {
+  const entries = [...(dt.items || [])]
+    .filter((it) => it.kind === "file")
+    .map((it) => (it.webkitGetAsEntry ? it.webkitGetAsEntry() : null));
+  if (!entries.length || entries.some((e) => !e)) return [...dt.files];
   const out = [];
-  for (let i = 0; i < files.length; i += UPLOAD_CHUNK) {
-    const r = await api("/api/upload", { method: "POST", body: { modo, archivos: files.slice(i, i + UPLOAD_CHUNK) } });
-    out.push(...r.archivos);
-  }
+  const walk = async (entry) => {
+    if (entry.isFile) { out.push(await new Promise((res, rej) => entry.file(res, rej))); return; }
+    if (!entry.isDirectory) return;
+    const reader = entry.createReader();
+    for (;;) {
+      const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      if (!batch.length) break;
+      for (const e of batch) await walk(e);
+    }
+  };
+  for (const e of entries) await walk(e);
   return out;
 }
 
-async function handleFiles(list) {
-  const picked = [...list].filter((f) => /\.txt$/i.test(f.name));
-  const skipped = list.length - picked.length;
-  if (!picked.length) { toast("Elige archivos .txt del sistema de facturación", "warn"); return; }
-  const dz = $("dropzone");
+async function postChunks(modo, files, extra = {}) {
+  const archivos = [], cargas = [];
+  for (let i = 0; i < files.length; i += UPLOAD_CHUNK) {
+    const r = await api("/api/upload", { method: "POST", body: { modo, ...extra, archivos: files.slice(i, i + UPLOAD_CHUNK) } });
+    archivos.push(...r.archivos);
+    if (r.carga) cargas.push(r.carga);
+  }
+  return { archivos, cargas };
+}
+
+async function handleFiles(list, { append = false } = {}) {
+  if (upload.busy) { toast("Espera a que termine la revisión en curso", "warn"); return; }
+  if (upload.done) { resetUpload(); append = false; }
+  const all = [...list];
+  const picked = all.filter((f) => /\.txt$/i.test(f.name));
+  const skipped = all.length - picked.length;
+  if (!picked.length) {
+    toast(all.length ? "Ninguno es .txt: elige los TXT del sistema de facturación" : "No llegó ningún archivo", "warn");
+    return;
+  }
+  const base = append ? upload.files : [];
+  if (base.length + picked.length > MAX_UPLOAD) {
+    toast(`Se pueden revisar hasta ${MAX_UPLOAD} archivos por vez (llegaron ${base.length + picked.length}); súbelos en partes`, "warn");
+    return;
+  }
+
+  upload.busy = true;
+  const dz = $("dropzone"), prog = $("dropzone-progress");
   dz.classList.add("is-busy");
-  $("upload-sub").textContent = `Revisando ${picked.length} archivo${picked.length === 1 ? "" : "s"}…`;
+  prog.hidden = false;
+  $("upload-send").disabled = true;
   try {
-    upload.files = await Promise.all(picked.map(async (f) => ({ nombre: f.name, contenido: await readAsBase64(f) })));
-    upload.results = await postChunks("revisar", upload.files);
-    dz.hidden = true;
+    let leidos = 0;
+    prog.textContent = `Leyendo 0 de ${picked.length}…`;
+    const nuevos = await Promise.all(picked.map(async (f) => {
+      const contenido = await readAsBase64(f);
+      prog.textContent = `Leyendo ${++leidos} de ${picked.length}…`;
+      return { nombre: f.name, contenido };
+    }));
+
+    // Mismo nombre: si el contenido es idéntico se ignora; si cambia, se conserva el primero.
+    const byName = new Map(base.map((f) => [f.nombre, f]));
+    let iguales = 0, choques = 0;
+    for (const f of nuevos) {
+      const prev = byName.get(f.nombre);
+      if (!prev) byName.set(f.nombre, f);
+      else if (prev.contenido === f.contenido) iguales += 1;
+      else choques += 1;
+    }
+    upload.files = [...byName.values()];
+    prog.textContent = `Revisando ${plural(upload.files.length, "archivo", "archivos")}…`;
+    $("upload-sub").textContent = prog.textContent;
+    upload.results = (await postChunks("revisar", upload.files)).archivos;
+    $("upload-body").hidden = true;
     renderUpload();
-    if (skipped) toast(`${skipped} archivo${skipped === 1 ? "" : "s"} sin extensión .txt no se incluyeron`, "warn");
+
+    const avisos = [];
+    if (skipped) avisos.push(`${plural(skipped, "archivo no es", "archivos no son")} .txt y no se incluyeron`);
+    if (iguales) avisos.push(`${plural(iguales, "archivo ya estaba", "archivos ya estaban")} en la lista`);
+    if (choques) avisos.push(`${plural(choques, "archivo tiene", "archivos tienen")} el mismo nombre que otro pero distinto contenido: se dejó el primero`);
+    if (avisos.length) toast(avisos.join(". "), "warn");
   } catch (err) {
     toast(err.message, "bad");
-    resetUpload();
-  } finally { dz.classList.remove("is-busy"); }
+    if (!append) resetUpload();
+  } finally {
+    upload.busy = false;
+    dz.classList.remove("is-busy");
+    prog.hidden = true;
+    syncUploadButton();
+  }
 }
 
 function renderUpload() {
@@ -645,7 +748,7 @@ function renderUpload() {
   const counts = {};
   res.forEach((r) => { counts[r.resultado] = (counts[r.resultado] || 0) + 1; });
   const queued = upload.done ? res.filter((r) => r.encolable && upload.sent.has(r.nombre)).length : 0;
-  $("upload-summary").innerHTML = (upload.done ? pill(`Dejados en la bandeja: ${queued}`, "info") : "")
+  $("upload-summary").innerHTML = (upload.done ? pill(`Dejados en la bandeja: ${queued}`, "info") : pill(`${plural(res.length, "archivo", "archivos")}`, "idle"))
     + Object.keys(RESULTADOS).filter((k) => counts[k])
       .map((k) => pill(`${RESULTADOS[k].label}: ${counts[k]}`, RESULTADOS[k].tone)).join("");
   $("upload-rows").innerHTML = res.map((r, i) => {
@@ -654,21 +757,42 @@ function renderUpload() {
       ? `<input class="row-check" type="checkbox" data-upload="${i}" checked aria-label="Incluir ${esc(r.nombre)}">` : "";
     const emision = r.fecha_emision
       ? `${fmtDate(r.fecha_emision)}${r.dias_desde_emision > 0 ? `<span class="file-sub">hace ${r.dias_desde_emision} días</span>` : ""}` : "—";
+    const enviado = upload.done && upload.sent.has(r.nombre) && r.encolable;
     return `<tr>
       <td>${check}</td>
       <td><span class="file-name">${esc(r.serie_numero || r.nombre)}</span><span class="file-sub">${esc(r.serie_numero ? `${tipoLabel(r.tipo)}, ${r.nombre}` : "")}</span></td>
       <td class="tnum">${emision}</td>
       <td class="num">${r.importe_total ? fmtMoney(r.importe_total, r.moneda) : "—"}</td>
-      <td>${pill(meta.label, meta.tone)}</td>
+      <td>${enviado ? pill("En la bandeja", "info") : pill(meta.label, meta.tone)}</td>
       <td><ul class="msgs">${(r.mensajes || []).map((m) => `<li>${esc(m)}</li>`).join("") || "<li>Sin observaciones</li>"}</ul></td>
     </tr>`;
   }).join("");
+  $("upload-all").hidden = upload.done || !res.some((r) => r.encolable);
   $("upload-results").hidden = false;
   $("upload-reset").hidden = false;
+  $("upload-more").hidden = upload.done;
+  $("upload-who-field").hidden = upload.done;
   $("upload-sub").textContent = upload.done
-    ? "Resultado de la carga."
-    : "Revisa el resultado. Desmarca los que no quieras enviar todavía.";
+    ? "Carga terminada. La constancia queda guardada y se puede descargar cuando se necesite."
+    : "Revisa el resultado. Desmarca los que no quieras enviar todavía; puedes soltar más archivos aquí.";
+  renderReceipt();
   syncUploadButton();
+}
+
+function renderReceipt() {
+  const el = $("receipt");
+  if (!upload.done || !upload.cargas.length) { el.hidden = true; return; }
+  const c0 = upload.cargas[0];
+  const enc = upload.cargas.reduce((n, c) => n + c.encolados, 0);
+  const tot = upload.cargas.reduce((n, c) => n + c.total, 0);
+  const nums = upload.cargas.map((c) => `N.º ${c.id}`).join(", ");
+  el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></svg>
+    <div class="receipt-text">
+      <strong>Carga registrada: constancia ${esc(nums)}</strong>
+      <span>${esc(fmtDateTime(c0.ts))}, ${esc(c0.usuario)}, desde ${esc(c0.origen || "este equipo")}. ${enc} de ${plural(tot, "archivo", "archivos")} dejados en la bandeja.</span>
+    </div>
+    ${upload.cargas.map((c) => `<a class="btn btn-secondary" href="/api/cargas/${c.id}.csv" download>Descargar constancia${upload.cargas.length > 1 ? ` N.º ${c.id}` : ""}</a>`).join("")}`;
+  el.hidden = false;
 }
 
 function selectedUploads() {
@@ -677,44 +801,100 @@ function selectedUploads() {
 function syncUploadButton() {
   const btn = $("upload-send");
   if (upload.done) { btn.disabled = false; btn.textContent = "Cerrar"; return; }
+  const total = document.querySelectorAll("[data-upload]").length;
   const n = selectedUploads().length;
-  btn.disabled = n === 0;
+  const all = $("upload-all");
+  all.checked = n > 0 && n === total;
+  all.indeterminate = n > 0 && n < total;
+  btn.disabled = n === 0 || upload.busy;
   btn.textContent = n ? `Enviar ${n} a la bandeja` : "Nada para enviar";
 }
 
 async function sendUploads(btn) {
   if (upload.done) { closeUpload(); return; }
+  const who = $("upload-who").value.trim().replace(/\s+/g, " ");
+  if (!who) { whoInvalid(true); $("upload-who").focus(); return; }
+  rememberWho(who);
   const chosen = new Set(selectedUploads().map((r) => r.nombre));
   const files = upload.files.filter((f) => chosen.has(f.nombre));
   if (!files.length) return;
   busy(btn, true);
+  upload.busy = true;
   try {
-    const res = await postChunks("encolar", files);
-    const ok = res.filter((r) => r.encolable).length;
-    const byName = new Map(res.map((r) => [r.nombre, r]));
+    const { archivos, cargas } = await postChunks("encolar", files, { responsable: who });
+    const ok = archivos.filter((r) => r.encolable).length;
+    const byName = new Map(archivos.map((r) => [r.nombre, r]));
     upload.results = upload.results.map((r) => byName.get(r.nombre) || r);
-    upload.done = true;
-    upload.sent = chosen;
+    Object.assign(upload, { done: true, sent: chosen, cargas });
     renderUpload();
-    toast(ok === files.length ? `${ok} dejado${ok === 1 ? "" : "s"} en la bandeja` : `${ok} de ${files.length} dejados en la bandeja; revisa el detalle`, ok === files.length ? "ok" : "warn");
+    toast(ok === files.length ? `${plural(ok, "archivo dejado", "archivos dejados")} en la bandeja; constancia guardada`
+      : `${ok} de ${files.length} dejados en la bandeja; revisa el detalle`, ok === files.length ? "ok" : "warn");
     loadSummary(); loadRows({ silent: true });
   } catch (err) {
     toast(err.message, "bad");
-  } finally { busy(btn, false); syncUploadButton(); }
+  } finally { upload.busy = false; busy(btn, false); syncUploadButton(); }
 }
 
 function bindUpload() {
-  const dz = $("dropzone");
   $("open-upload").addEventListener("click", openUpload);
   $("upload-close").addEventListener("click", closeUpload);
-  $("upload-reset").addEventListener("click", resetUpload);
+  $("upload-reset").addEventListener("click", () => { resetUpload(); loadHistory(); });
   $("upload-send").addEventListener("click", (e) => sendUploads(e.currentTarget));
   $("upload-input").addEventListener("change", (e) => handleFiles(e.target.files));
+  $("upload-more-input").addEventListener("change", (e) => { handleFiles(e.target.files, { append: true }); e.target.value = ""; });
+  $("upload-who").addEventListener("input", () => whoInvalid(false));
   $("upload-rows").addEventListener("change", (e) => { if (e.target.matches("[data-upload]")) syncUploadButton(); });
-  ["dragenter", "dragover"].forEach((t) => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.add("is-over"); }));
-  ["dragleave", "drop"].forEach((t) => dz.addEventListener(t, () => dz.classList.remove("is-over")));
-  dz.addEventListener("drop", (e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); });
+  $("upload-all").addEventListener("change", (e) => {
+    document.querySelectorAll("[data-upload]").forEach((c) => { c.checked = e.target.checked; });
+    syncUploadButton();
+  });
   $("upload").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeUpload(); } });
+  bindGlobalDrop();
+}
+
+// Soltar archivos o carpetas en cualquier parte del panel abre la carga.
+function bindGlobalDrop() {
+  const overlay = $("drop-overlay");
+  let depth = 0;
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  const reviewing = () => !$("upload").hidden && upload.results.length > 0 && !upload.done;
+  const show = (on) => {
+    if (on) {
+      overlay.querySelector("strong").textContent = reviewing() ? "Suelta para agregarlos a la revisión" : "Suelta para revisar los TXT";
+      overlay.hidden = false;
+      requestAnimationFrame(() => overlay.classList.add("is-on"));
+    } else {
+      overlay.classList.remove("is-on");
+      setTimeout(() => { if (!overlay.classList.contains("is-on")) overlay.hidden = true; }, 160);
+    }
+  };
+  window.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (depth++ === 0) show(true);
+  });
+  window.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = upload.busy || !$("modal").hidden ? "none" : "copy";
+  });
+  window.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (!depth) show(false);
+  });
+  window.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();             // sin esto el navegador abriría el TXT y se saldría del panel
+    depth = 0;
+    show(false);
+    if (upload.busy || !$("modal").hidden) return;
+    const append = reviewing();
+    const pending = droppedFiles(e.dataTransfer);
+    if ($("upload").hidden) openUpload();
+    pending.then((files) => handleFiles(files, { append }))
+      .catch(() => toast("No se pudieron leer los archivos soltados", "bad"));
+  });
 }
 
 // --- eventos ----------------------------------------------------------------

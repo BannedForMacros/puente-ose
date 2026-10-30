@@ -48,6 +48,7 @@ MAX_BODY = 64_000
 MAX_UPLOAD_BODY = 30 * 1024 * 1024
 HEARTBEAT_STALE_SECONDS = 120
 FILE_KINDS = {"txt": "archivo", "xml": "xml_path", "pdf": "pdf_path", "sbd": "sbd_path"}
+_CARGA_ROUTE = re.compile(r"^/api/cargas/(\d+)\.csv$")
 _DOC_ROUTE = re.compile(r"^/api/documents/([^/]+)(?:/(retry|consultar|archivo/(txt|xml|pdf|sbd)))?$")
 
 
@@ -175,22 +176,57 @@ class PanelApp:
         hechas = [a for a in acciones if "OMITIDO" not in a]
         return {"reintentados": len(hechas), "omitidos": len(acciones) - len(hechas), "detalle": acciones}
 
-    def upload(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Carga masiva: modo "revisar" no toca nada; "encolar" deja los válidos en la bandeja."""
+    def upload(self, body: dict[str, Any], usuario: str = "", origen: str = "") -> dict[str, Any]:
+        """Carga masiva: modo "revisar" no toca nada; "encolar" deja los válidos en la bandeja
+        y guarda la constancia de la carga."""
         archivos = body.get("archivos")
         if not isinstance(archivos, list) or not archivos:
             raise PanelError(HTTPStatus.BAD_REQUEST, "No se recibieron archivos")
+        carga = None
+        responsable = " ".join(str(body.get("responsable") or "").split())[:80]
+        if body.get("modo") == "encolar":
+            if not responsable:
+                raise PanelError(HTTPStatus.BAD_REQUEST, "Indica quién sube los archivos: queda en la constancia")
+            usuario = responsable if usuario in ("", "local", responsable) else f"{responsable} (acceso {usuario})"
         try:
             if body.get("modo") == "encolar":
-                checks = upload.enqueue(self.s, self.db, archivos)
-                log.info("Panel: carga masiva, %d de %d archivos encolados",
-                         sum(c.encolable for c in checks), len(checks))
+                checks, carga_id = upload.enqueue(self.s, self.db, archivos, usuario=usuario, origen=origen)
+                log.info("Panel: carga N.º %d de %s (%s), %d de %d archivos encolados", carga_id, usuario,
+                         origen, sum(c.encolable for c in checks), len(checks))
+                carga = self._carga(self.db.upload(carga_id)[0])
             else:
                 checks = upload.check_files(self.s, self.db, archivos)
         except ValueError as exc:
             raise PanelError(HTTPStatus.BAD_REQUEST, str(exc)) from None
         return {"archivos": upload.as_dicts(checks),
-                "encolables": sum(c.encolable for c in checks)}
+                "encolables": sum(c.encolable for c in checks), "carga": carga}
+
+    def uploads(self) -> dict[str, Any]:
+        return {"cargas": [self._carga(r) for r in self.db.uploads(20)]}
+
+    def upload_csv(self, carga_id: int) -> tuple[str, bytes]:
+        head, files = self.db.upload(carga_id)
+        if head is None:
+            raise PanelError(HTTPStatus.NOT_FOUND, f"No existe la carga N.º {carga_id}")
+        out = io.StringIO()
+        w = csv.writer(out, delimiter=";")
+        w.writerow(["Constancia de carga de TXT", f"N.º {head['id']}"])
+        w.writerow(["Fecha y hora", head["ts"]])
+        w.writerow(["Usuario", head["usuario"]])
+        w.writerow(["Equipo (IP)", head["origen"]])
+        w.writerow(["Archivos", head["total"], "Dejados en la bandeja", head["encolados"]])
+        w.writerow([])
+        w.writerow(["Archivo", "Guardado como", "Comprobante", "Resultado", "Detalle", "Bytes", "Huella SHA-256"])
+        for f in files:
+            w.writerow([f["nombre"], f["nombre_final"] or "", f["clave"] or "",
+                        "Dejado en la bandeja" if f["encolado"] else f"No subido ({f['resultado']})",
+                        f["detalle"] or "", f["bytes"] or "", f["sha256"] or ""])
+        return f"constancia_carga_{head['id']:05d}.csv", ("\ufeff" + out.getvalue()).encode("utf-8")
+
+    @staticmethod
+    def _carga(r: sqlite3.Row) -> dict[str, Any]:
+        return {"id": r["id"], "ts": r["ts"], "usuario": r["usuario"], "origen": r["origen"],
+                "total": r["total"], "encolados": r["encolados"]}
 
     def consult(self, clave: str) -> dict[str, Any]:
         """Consulta a Sovos ahora. Si está pendiente, actualiza el estado como lo haría el servicio."""
@@ -299,7 +335,14 @@ def make_handler(app: PanelApp, user: str, password: str):
                 return self._send(HTTPStatus.OK, app.export_csv(params), "text/csv; charset=utf-8",
                                   {"Content-Disposition": f'attachment; filename="{name}"'})
             if method == "POST" and path == "/api/upload":
-                return self._json(app.upload(self._body(MAX_UPLOAD_BODY)))
+                return self._json(app.upload(self._body(MAX_UPLOAD_BODY), self._user(), self.client_address[0]))
+            if method == "GET" and path == "/api/cargas":
+                return self._json(app.uploads())
+            m = _CARGA_ROUTE.match(path)
+            if method == "GET" and m:
+                name, data = app.upload_csv(int(m.group(1)))
+                return self._send(HTTPStatus.OK, data, "text/csv; charset=utf-8",
+                                  {"Content-Disposition": f'attachment; filename="{name}"'})
             if method == "POST" and path == "/api/retry-errors":
                 body = self._body()
                 return self._json(app.retry_all(bool(body.get("forzar")), bool(body.get("todos"))))
@@ -324,6 +367,16 @@ def make_handler(app: PanelApp, user: str, password: str):
         def _authorized(self) -> bool:
             header = self.headers.get("Authorization", "")
             return header.startswith("Basic ") and hmac.compare_digest(header[6:].strip(), expected)
+
+        def _user(self) -> str:
+            """Usuario de HTTP Basic, o "local" si el panel se abrió en el mismo equipo sin clave."""
+            header = self.headers.get("Authorization", "")
+            if header.startswith("Basic "):
+                try:
+                    return base64.b64decode(header[6:].strip()).decode("utf-8").split(":", 1)[0] or "local"
+                except (ValueError, UnicodeDecodeError):
+                    pass
+            return "local"
 
         def _body(self, max_bytes: int = MAX_BODY) -> dict[str, Any]:
             length = _int(self.headers.get("Content-Length"), 0, 0, 1 << 31)

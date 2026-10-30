@@ -4,12 +4,18 @@ Cada archivo pasa por las mismas reglas que el servicio (nombre, parser,
 validador) y se cruza con la base para no reenviar lo que Sovos ya tiene.
 Encolar solo deja el TXT en la bandeja: el servicio lo envía como cualquier
 otro, con su control de duplicados.
+
+Además del número de comprobante, cada archivo se identifica por su huella
+SHA-256: así se detecta si es exactamente el mismo archivo subido antes o si
+su contenido cambió respecto al que ya se envió. Cada carga confirmada deja
+una constancia (quién, cuándo, desde qué equipo y la huella de cada archivo).
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import date
@@ -44,6 +50,8 @@ class FileCheck:
     cliente_doc: str = ""
     dias_desde_emision: int | None = None
     reenvio: bool = False              # ya existe con error/rechazo: el servicio lo reprocesa
+    sha256: str = ""
+    bytes: int = 0
     mensajes: list[str] = field(default_factory=list)
 
     @property
@@ -68,8 +76,10 @@ def check_files(s: Settings, db: Database, archivos: list[dict]) -> list[FileChe
     return out
 
 
-def enqueue(s: Settings, db: Database, archivos: list[dict]) -> list[FileCheck]:
-    """Vuelve a revisar (el estado pudo cambiar) y deja en la bandeja solo los encolables."""
+def enqueue(s: Settings, db: Database, archivos: list[dict], *, usuario: str = "",
+            origen: str = "") -> tuple[list[FileCheck], int]:
+    """Vuelve a revisar (el estado pudo cambiar), deja en la bandeja solo los encolables
+    y guarda la constancia de la carga. Devuelve las revisiones y el N.º de carga."""
     contenidos = {str(a.get("nombre") or ""): a.get("contenido") for a in archivos}
     checks = check_files(s, db, archivos)
     s.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +92,11 @@ def enqueue(s: Settings, db: Database, archivos: list[dict]) -> list[FileCheck]:
         tmp.write_bytes(data)
         os.replace(tmp, final)
         c.mensajes.append("Dejado en la bandeja; el servicio lo enviará en la próxima revisión")
-    return checks
+    carga_id = db.save_upload(usuario=usuario or "local", origen=origen, archivos=[
+        {"nombre": c.nombre, "nombre_final": c.nombre_final, "clave": c.clave, "sha256": c.sha256,
+         "bytes": c.bytes, "encolado": c.encolable, "resultado": "encolado" if c.encolable else c.resultado,
+         "detalle": "; ".join(c.mensajes)} for c in checks])
+    return checks, carga_id
 
 
 def as_dicts(checks: list[FileCheck]) -> list[dict]:
@@ -97,6 +111,7 @@ def _check_one(s: Settings, db: Database, nombre: str, contenido, en_cola: set[s
     except ValueError as exc:
         c.mensajes.append(str(exc))
         return c
+    c.sha256, c.bytes = hashlib.sha256(data).hexdigest(), len(data)
     try:
         info = parse_filename(c.nombre)
     except ParseError as exc:
@@ -124,9 +139,17 @@ def _check_one(s: Settings, db: Database, nombre: str, contenido, en_cola: set[s
         return c
 
     prev = db.get(info.clave)
+    antes = _uploaded_before(db, c)
+    igual_al_enviado = _same_as_stored(prev, c.sha256)
     if prev is not None and prev["estado"] in YA_EN_SOVOS:
         c.resultado = "ya_enviado"
         c.mensajes.insert(0, f"Ya está en Sovos con estado {prev['estado']}; no se vuelve a enviar")
+        if igual_al_enviado is False and prev["estado"] == Estado.APROBADO:
+            c.mensajes.insert(1, "Su contenido es distinto al del comprobante aprobado: un número aprobado no se "
+                                 "puede volver a emitir; si hay un error, corregirlo con una nota de crédito")
+        elif igual_al_enviado:
+            c.mensajes.insert(1, "Es exactamente el mismo archivo que ya se envió")
+        c.mensajes += antes
         return c
     if prev is not None and prev["envio_incierto"]:
         c.mensajes.insert(0, "Tiene un envío previo incierto: resolverlo desde su detalle antes de subirlo")
@@ -136,19 +159,49 @@ def _check_one(s: Settings, db: Database, nombre: str, contenido, en_cola: set[s
         c.mensajes.insert(0, "Ya hay un archivo con este comprobante esperando en la bandeja")
         return c
 
+    avisos = antes + list(v.advertencias)
     c.reenvio = prev is not None
     if c.reenvio:
         c.mensajes.insert(0, f"Ya se intentó antes ({prev['estado']}); se volverá a enviar")
+        if igual_al_enviado:
+            motivo = f": {prev['mensaje']}" if prev["mensaje"] else ""
+            avisos.insert(0, f"Es idéntico al archivo que terminó {prev['estado']}{motivo}. Si no se corrigió "
+                             "nada (ni el TXT ni el comprobante que referencia), volverá a fallar")
     try:
         c.dias_desde_emision = (date.today() - date.fromisoformat(doc.fecha_emision)).days
     except ValueError:
         pass
-    avisos = list(v.advertencias)
     if c.dias_desde_emision is not None and c.dias_desde_emision > DIAS_AVISO:
         avisos.insert(0, f"Emitido hace {c.dias_desde_emision} días: confirmar el plazo de envío con contabilidad")
     c.mensajes += avisos
     c.resultado = "advertencia" if avisos else "valido"
     return c
+
+
+def _uploaded_before(db: Database, c: FileCheck) -> list[str]:
+    prev = db.last_upload_of(sha256=c.sha256)
+    if prev is not None:
+        return [f"Este mismo archivo ya se subió el {_fecha_hora(prev['ts'])} por {prev['usuario']} "
+                f"(carga N.º {prev['carga_id']})"]
+    prev = db.last_upload_of(clave=c.clave)
+    if prev is not None:
+        return [f"Este comprobante ya se subió el {_fecha_hora(prev['ts'])} por {prev['usuario']} "
+                f"(carga N.º {prev['carga_id']}) con un contenido distinto"]
+    return []
+
+
+def _same_as_stored(row, sha256: str) -> bool | None:
+    """Compara con el TXT que el puente ya procesó. None si no hay con qué comparar."""
+    if row is None or not row["archivo"]:
+        return None
+    try:
+        return hashlib.sha256(Path(row["archivo"]).read_bytes()).hexdigest() == sha256
+    except OSError:
+        return None
+
+
+def _fecha_hora(ts: str) -> str:
+    return f"{ts[8:10]}/{ts[5:7]}/{ts[:4]} a las {ts[11:16]}" if len(ts) >= 16 else ts
 
 
 def _decode(contenido) -> bytes:
