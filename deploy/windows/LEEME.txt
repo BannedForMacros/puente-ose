@@ -1,44 +1,40 @@
 PUENTE SOVOS - INSTALACION EN EL SERVIDOR
 =========================================
 
-Este paquete trae todo lo necesario; no hace falta internet para instalar
-(solo para que el puente hable con Sovos una vez instalado).
+Normalmente basta con el archivo InstalarPuenteSovos_FECHA.cmd: doble clic,
+aceptar el permiso de administrador y esperar. No pregunta nada.
 
+Este paquete (si lo tienes descomprimido) es lo mismo en carpetas:
+  INSTALAR.cmd    doble clic para instalar
   python\         Python portatil con sus librerias (no toca otro Python del equipo)
   app\            el puente
   nssm.exe        lo deja como servicio de Windows
   datos\work\     base de datos y comprobantes ya procesados
-  datos\cola\     TXT que en la PC anterior ya estaban saliendo hacia Sovos
-  datos\secretos\ CERTIFICADO Y CLAVES: no lo copies a otro lado ni lo envies por correo
 
-PASOS
-1. IMPORTANTE: el puente de la PC anterior debe estar DETENIDO. Si dos puentes
-   corren a la vez pueden enviar el mismo comprobante dos veces.
-2. Copia el ZIP al servidor con una USB (no por correo ni WhatsApp) y
-   descomprimelo (clic derecho > Extraer todo).
-3. Doble clic en INSTALAR.cmd y acepta el permiso de administrador.
-4. Responde las preguntas. Lo recomendado ya viene marcado; basta con Enter.
-   La unica que debes saber: la carpeta donde el sistema de facturacion deja los TXT.
-5. Al final se abre el panel. Queda un acceso directo "Panel Puente Sovos"
-   en el escritorio.
-6. Borra el ZIP y la carpeta descomprimida, y vacia la papelera.
+ANTES DE INSTALAR
+- El puente de la PC anterior debe estar DETENIDO (dos puentes a la vez podrian
+  enviar el mismo comprobante dos veces). El empaquetado ya lo detiene.
+- Si en el servidor corre el puente antiguo de otro proveedor, desinstalalo.
 
-QUE HACE EL INSTALADOR
-- Instala en C:\sovos_bridge (se puede cambiar).
-- Crea el servicio "Puente Sovos - Facturacion electronica": arranca solo al
-  encender el equipo, aunque nadie inicie sesion, y se vuelve a levantar si se cae.
-- Si la carpeta de TXT ya tiene archivos, ofrece moverlos aparte para que
-  pasen por la bandeja del panel (asi no se envian sin revisar).
-- Evita que el equipo se suspenda (si duerme, no envia).
-- Deja la configuracion y el certificado accesibles solo para administradores.
+QUE HACE
+- Instala en C:\sovos_bridge y crea el servicio "Puente Sovos - Facturacion
+  electronica": arranca solo al encender el equipo, aunque nadie inicie sesion,
+  y se vuelve a levantar si se cae. Desactiva la suspension del equipo.
+- Instala la base de datos con lo ya procesado (solo la primera vez; al
+  actualizar conserva la del servidor).
+- Panel en http://puente-sovos/ (en el servidor) y http://NOMBRE-DEL-SERVIDOR/
+  desde otras PC. Genera una clave y la deja en el escritorio:
+  "Acceso Puente Sovos.txt".
 
-ACTUALIZAR
-Ejecuta INSTALAR.cmd de un paquete nuevo. Conserva la configuracion y, si lo
-indicas, la base de datos del servidor.
+DESPUES DE INSTALAR (en el panel, pestaña Configuracion)
+1. Certificado digital: subir el .pfx/.p12 y su contrasena.
+2. Conexion con Sovos: Client ID y Client Secret.
+3. Carpeta de TXT: la carpeta donde el sistema de facturacion deja los TXT.
+   Si ya tiene TXT, ofrece pasarlos a la bandeja para revisarlos.
+Hasta completar esto no se envia nada.
 
 COMANDOS UTILES (PowerShell como administrador)
   Get-Service SovosBridge          estado
   Restart-Service SovosBridge      reiniciar
   Stop-Service SovosBridge         detener (lo pendiente se retoma al iniciar)
-  Start-Service SovosBridge        iniciar
 Registros: C:\sovos_bridge\work\logs

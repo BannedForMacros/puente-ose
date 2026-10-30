@@ -44,17 +44,29 @@ class Pipeline:
             forma_pago_defecto=settings.forma_pago_defecto,
         )
         self.signer: Signer | None = None
+        # Si el certificado falta o no abre, el servicio sigue vivo (el panel permite
+        # cargarlo) pero no se procesa la bandeja: ver service/configuracion.py.
+        self.problema_firma: str = ""
         if settings.sovos_signing_mode == "propio":
-            if not settings.cert_path:
-                raise SigningError("SOVOS_SIGNING_MODE=propio requiere CERT_PATH (certificado .pfx de la clínica)")
-            self.signer = Signer.from_pkcs12(settings.cert_path, settings.cert_password.get_secret_value())
-            i = self.signer.info
-            log.info("Firma propia activa: certificado serie %s, %s, vence %s", i.serial_hex, i.subject,
-                     f"{i.not_after:%d/%m/%Y}")
+            try:
+                if not settings.cert_path:
+                    raise SigningError("Falta cargar el certificado digital de la clínica")
+                self.signer = Signer.from_pkcs12(settings.cert_path, settings.cert_password.get_secret_value())
+                self.signer.check_validity()
+            except SigningError as exc:
+                self.signer, self.problema_firma = None, str(exc)
+                log.warning("Firma propia sin certificado utilizable: %s", exc)
+            else:
+                i = self.signer.info
+                log.info("Firma propia activa: certificado serie %s, %s, vence %s", i.serial_hex, i.subject,
+                         f"{i.not_after:%d/%m/%Y}")
 
     # ------------------------------------------------------------------------
     def process(self, src: Path) -> Result:
         """Procesa un TXT (de la bandeja o indicado por el comando `send`)."""
+        if self.problema_firma:
+            # Nunca se envía sin firmar: el TXT queda donde está hasta que se cargue el certificado.
+            raise SigningError(self.problema_firma)
         work = files.move(src, self.s.processing_dir)
         log.info("Procesando %s", work.name)
 

@@ -40,7 +40,115 @@
       Bandeja <span class="tab-count" id="tab-tray-count" hidden></span>
     </button>
     <button class="tab" type="button" data-view="docs" id="tab-docs" aria-selected="true">Comprobantes</button>
+    <button class="tab" type="button" data-view="config" id="tab-config" aria-selected="false">
+      Configuración <span class="tab-dot" id="tab-config-dot" hidden aria-label="Falta configurar"></span>
+    </button>
   </nav>
+
+  <div class="config-banner" id="config-banner" role="alert" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4M12 16.5v.5"/><path d="M10.3 4.2 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0Z"/></svg>
+    <div><strong>No se envía nada todavía.</strong> <span id="config-banner-text"></span></div>
+    <button class="btn btn-primary btn-sm" type="button" data-view-go="config">Completar configuración</button>
+  </div>
+
+  <main class="page" id="view-config" hidden>
+    <header class="tray-head">
+      <div>
+        <h2>Configuración</h2>
+        <p class="tray-sub">Todo se valida antes de guardarse y se aplica sin reiniciar el servicio.</p>
+      </div>
+      <label class="field tray-who" id="config-who-field">
+        <span class="field-label">Quién opera (queda en el registro)</span>
+        <input type="text" id="config-who" maxlength="80" autocomplete="name" placeholder="Nombre y apellido">
+      </label>
+    </header>
+
+    <div class="config-grid">
+      <section class="card config-card" id="card-cert" aria-labelledby="cert-title">
+        <header class="card-head">
+          <span class="step-num" aria-hidden="true">1</span>
+          <div><h3 id="cert-title">Certificado digital</h3><p>El que la clínica registró en SUNAT para firmar comprobantes.</p></div>
+          <span id="cert-badge"></span>
+        </header>
+        <dl class="facts-grid" id="cert-facts"></dl>
+        <form class="config-form" id="cert-form" novalidate>
+          <label class="file-pick" id="cert-pick">
+            <input type="file" id="cert-file" accept=".pfx,.p12,application/x-pkcs12">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m0 0-4 4m4-4 4 4M5 15v4a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4"/></svg>
+            <span id="cert-file-name">Elige o suelta el archivo .pfx o .p12</span>
+          </label>
+          <label class="field">
+            <span class="field-label">Contraseña del certificado</span>
+            <input type="password" id="cert-pass" autocomplete="off">
+          </label>
+          <p class="field-error" id="cert-error" hidden></p>
+          <div class="form-actions"><button class="btn btn-primary" type="submit" id="cert-save">Validar y guardar</button></div>
+          <p class="form-hint">Se comprueba la contraseña, que sea del RUC de la clínica y que esté vigente. Compara la serie con SOL &gt; Registro de certificado digital.</p>
+        </form>
+      </section>
+
+      <section class="card config-card" id="card-sovos" aria-labelledby="sovos-title">
+        <header class="card-head">
+          <span class="step-num" aria-hidden="true">2</span>
+          <div><h3 id="sovos-title">Conexión con Sovos</h3><p>Las credenciales que entregó Sovos para esta clínica.</p></div>
+          <span id="sovos-badge"></span>
+        </header>
+        <form class="config-form" id="sovos-form" novalidate>
+          <label class="field">
+            <span class="field-label">Ambiente</span>
+            <select id="sovos-amb">
+              <option value="produccion">Producción (emite comprobantes reales)</option>
+              <option value="pruebas">Pruebas</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Client ID</span>
+            <input type="text" id="sovos-id" autocomplete="off" spellcheck="false">
+          </label>
+          <label class="field">
+            <span class="field-label">Client Secret</span>
+            <input type="password" id="sovos-secret" autocomplete="off">
+          </label>
+          <p class="field-error" id="sovos-error" hidden></p>
+          <div class="form-actions"><button class="btn btn-primary" type="submit" id="sovos-save">Probar y guardar</button></div>
+          <p class="form-hint">Antes de guardar se pide un token a Sovos: si las credenciales no sirven, no se cambia nada.</p>
+        </form>
+      </section>
+
+      <section class="card config-card" id="card-dir" aria-labelledby="dir-title">
+        <header class="card-head">
+          <span class="step-num" aria-hidden="true">3</span>
+          <div><h3 id="dir-title">Carpeta de TXT</h3><p>Donde el sistema de facturación deja los TXT en este servidor.</p></div>
+          <span id="dir-badge"></span>
+        </header>
+        <form class="config-form" id="dir-form" novalidate>
+          <label class="field">
+            <span class="field-label">Ruta de la carpeta</span>
+            <input type="text" id="dir-path" autocomplete="off" spellcheck="false" placeholder="C:\facturacion\salida_txt">
+          </label>
+          <p class="field-error" id="dir-error" hidden></p>
+          <div class="form-actions"><button class="btn btn-primary" type="submit" id="dir-save">Guardar</button></div>
+          <p class="form-hint">Si ya tiene TXT, te ofrece pasarlos a la bandeja para revisarlos antes de enviar.</p>
+        </form>
+      </section>
+
+      <section class="card config-card" id="card-access" aria-labelledby="access-title">
+        <header class="card-head">
+          <span class="step-num" aria-hidden="true">4</span>
+          <div><h3 id="access-title">Acceso al panel</h3><p>Direcciones para entrar desde este servidor y desde la red.</p></div>
+        </header>
+        <ul class="url-list" id="access-urls"></ul>
+        <form class="config-form" id="pass-form" novalidate>
+          <label class="field">
+            <span class="field-label">Nueva clave del panel (usuario <span id="access-user">admin</span>)</span>
+            <input type="password" id="pass-new" autocomplete="new-password" minlength="8">
+          </label>
+          <p class="field-error" id="pass-error" hidden></p>
+          <div class="form-actions"><button class="btn btn-secondary" type="submit" id="pass-save">Cambiar clave</button></div>
+        </form>
+      </section>
+    </div>
+  </main>
 
   <main class="page" id="view-tray" hidden>
     <header class="tray-head">

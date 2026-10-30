@@ -59,6 +59,8 @@ class Settings(BaseModel):
     ui_port: int = Field(8765, ge=1, le=65535)
     ui_user: str = "admin"
     ui_password: SecretStr = SecretStr("")
+    # Nombre para entrar al panel en vez de "localhost" (el instalador lo agrega al archivo hosts)
+    ui_alias: str = ""
 
     @field_validator("sovos_base_url")
     @classmethod
@@ -122,12 +124,46 @@ class Settings(BaseModel):
             self.dry_run_dir.mkdir(parents=True, exist_ok=True)
 
 
-def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
-    """Carga .env (si existe) y construye Settings desde el entorno."""
-    load_dotenv(env_file or Path.cwd() / ".env", override=False)
+def env_path(env_file: str | os.PathLike | None = None) -> Path:
+    return Path(env_file) if env_file else Path.cwd() / ".env"
+
+
+def load_settings(env_file: str | os.PathLike | None = None, override: bool = False) -> Settings:
+    """Carga .env (si existe) y construye Settings desde el entorno.
+
+    override=True se usa al recargar tras un cambio hecho desde el panel: el .env manda."""
+    load_dotenv(env_path(env_file), override=override)
     values = {}
     for name in Settings.model_fields:
         raw = os.environ.get(name.upper())
         if raw is not None and raw != "":
             values[name] = raw
     return Settings(**values)
+
+
+def update_env_file(path: Path, values: dict[str, str]) -> None:
+    """Cambia o agrega claves del .env conservando el resto (comentarios y orden).
+
+    Los valores con espacios o caracteres especiales van entre comillas simples, que
+    python-dotenv toma literal ($ y # incluidos). Escritura atómica."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    pending = dict(values)
+    out = []
+    for line in lines:
+        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+        if key in pending:
+            out.append(f"{key}={_env_quote(pending.pop(key))}")
+        else:
+            out.append(line)
+    out += [f"{k}={_env_quote(v)}" for k, v in pending.items()]
+    tmp = path.with_name(path.name + ".nuevo")
+    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _env_quote(value: str) -> str:
+    if "'" in value:
+        raise ValueError("El valor no puede contener comilla simple (')")
+    if value == "" or all(c.isalnum() or c in "-_.:/\\@" for c in value):
+        return value
+    return f"'{value}'"

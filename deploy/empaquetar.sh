@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Arma el paquete de instalación para el servidor Windows con todo lo de esta PC:
-# programa, Python portátil con sus librerías, NSSM, la base de datos (copia
-# consistente) con los comprobantes ya procesados, la bandeja, el certificado y la
-# configuración. Resultado: dist/PuenteSovos_AAAAMMDD_HHMM.zip
+# Arma el instalador para el servidor Windows: UN SOLO ARCHIVO
+#   dist/InstalarPuenteSovos_AAAAMMDD_HHMM.cmd
+# con Python portátil, el puente, NSSM y la base de datos (copia consistente) con
+# lo ya procesado, la bandeja y las constancias. Doble clic en el servidor y listo.
 #
-# Uso:  deploy/empaquetar.sh            (pregunta si detener el puente de esta PC)
-#       DETENER=si deploy/empaquetar.sh  (lo detiene sin preguntar: migración definitiva)
-#       DETENER=no deploy/empaquetar.sh  (no lo detiene: paquete de prueba)
+# Por defecto NO lleva secretos (certificado, clave del certificado, Client Secret,
+# clave del panel): se cargan en el panel, pestaña Configuración.
+#
+# Uso:  deploy/empaquetar.sh                    pregunta si detener el puente de esta PC
+#       DETENER=si deploy/empaquetar.sh         lo detiene sin preguntar (migración definitiva)
+#       DETENER=no deploy/empaquetar.sh         no lo detiene (paquete de prueba)
+#       INCLUIR_SECRETOS=si deploy/empaquetar.sh  incluye certificado y claves (evitarlo)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -78,17 +82,37 @@ git -C "$ROOT" archive HEAD sovos_bridge pyproject.toml requirements.txt README.
 
 paso "Base de datos y comprobantes"
 DATOS="$STAGE/datos"
-mkdir -p "$DATOS/work/db" "$DATOS/cola" "$DATOS/secretos"
+mkdir -p "$DATOS/work/db" "$DATOS/secretos"
 sqlite3 "$WORK/db/sovos_bridge.db" ".backup '$DATOS/work/db/sovos_bridge.db'"
 sqlite3 "$DATOS/work/db/sovos_bridge.db" "PRAGMA integrity_check;" | grep -qx ok || { echo "La copia de la base no pasó la verificación"; exit 1; }
 rsync -a --exclude 'db/' --exclude 'logs/' --exclude 'cert/' --exclude 'inbox/' --exclude 'dry_run/' \
       --exclude 'heartbeat' --exclude '*_respaldo_*' --exclude '.DS_Store' "$WORK/" "$DATOS/work/"
-if [ -d "$INBOX" ]; then find "$INBOX" -maxdepth 1 -name '*.txt' -exec cp {} "$DATOS/cola/" \; ; fi
+# Lo que en esta PC ya estaba en cola (liberado pero sin enviar) vuelve a la bandeja
+# del servidor para liberarlo allá; lo que no venga de la bandeja se guarda aparte.
+if [ -d "$INBOX" ]; then
+  for f in "$INBOX"/*.txt; do
+    [ -e "$f" ] || continue
+    n="$(basename "$f")"
+    hit=$(sqlite3 "$DATOS/work/db/sovos_bridge.db" "select count(*) from bandeja where nombre_final='${n//\'/}' and estado='EN_COLA'")
+    if [ "$hit" = "1" ]; then
+      sqlite3 "$DATOS/work/db/sovos_bridge.db" "update bandeja set estado='PREPARADO', mensaje='Estaba en cola en la PC anterior: vuelve a liberarlo' where nombre_final='${n//\'/}'"
+    else
+      mkdir -p "$DATOS/work/importados/cola_pc_anterior"; cp "$f" "$DATOS/work/importados/cola_pc_anterior/"
+    fi
+  done
+fi
 printf '%s' "$WORK" > "$DATOS/origen.txt"
 
-paso "Configuración y certificado"
-cp "$ENV_FILE" "$DATOS/secretos/env"
-if [ -n "$CERT" ] && [ -f "$CERT" ]; then cp "$CERT" "$DATOS/secretos/$(basename "$CERT")"; fi
+paso "Configuración"
+if [ "${INCLUIR_SECRETOS:-no}" = "si" ]; then
+  cp "$ENV_FILE" "$DATOS/env"
+  if [ -n "$CERT" ] && [ -f "$CERT" ]; then cp "$CERT" "$DATOS/secretos/$(basename "$CERT")"; fi
+  echo "AVISO: el paquete lleva el certificado y las claves"
+else
+  # Sin secretos ni rutas de esta PC: se completan en el panel del servidor.
+  grep -v -E '^(SOVOS_CLIENT_SECRET|SOVOS_STATIC_TOKEN|CERT_PATH|CERT_PASSWORD|UI_PASSWORD|UI_HOST|UI_PORT|INBOX_DIR|WORK_DIR|DRY_RUN)=' \
+    "$ENV_FILE" > "$DATOS/env"
+fi
 
 paso "Instalador"
 # PowerShell 5.1 necesita UTF-8 con BOM para leer tildes; Windows prefiere CRLF.
@@ -96,14 +120,16 @@ paso "Instalador"
 cp "$ROOT/deploy/windows/INSTALAR.cmd" "$STAGE/"
 sed 's/$/\r/' "$ROOT/deploy/windows/LEEME.txt" > "$STAGE/LEEME.txt"
 
-OUT="$ROOT/dist/PuenteSovos_$STAMP.zip"
-(cd "$(dirname "$STAGE")" && zip -qr -X "$OUT" PuenteSovos)
+paso "Instalador de un solo archivo"
+ZIP="$(dirname "$STAGE")/paquete.zip"
+(cd "$(dirname "$STAGE")" && zip -qr -X "$ZIP" PuenteSovos)
+OUT="$ROOT/dist/InstalarPuenteSovos_$STAMP.cmd"
+{ sed 's/$/\r/' "$ROOT/deploy/windows/autoextraible.cmd"; base64 -b 76 -i "$ZIP" | sed 's/$/\r/'; } > "$OUT"
 chmod 600 "$OUT"
 
 DOCS=$(sqlite3 "$DATOS/work/db/sovos_bridge.db" "select count(*) from documentos")
 TRAY=$(sqlite3 "$DATOS/work/db/sovos_bridge.db" "select count(*) from bandeja where estado<>'EN_COLA'")
-COLA=$(find "$DATOS/cola" -name '*.txt' | wc -l | tr -d ' ')
 paso "Listo"
-echo "Paquete : $OUT ($(du -h "$OUT" | cut -f1))"
-echo "Incluye : $DOCS comprobantes, $TRAY en la bandeja, $COLA en cola, certificado y configuración"
-echo "IMPORTANTE: lleva el certificado y las claves. Cópialo por USB, no por correo ni WhatsApp."
+echo "Instalador: $OUT ($(du -h "$OUT" | cut -f1))"
+echo "Incluye   : $DOCS comprobantes, $TRAY en la bandeja, constancias y archivos procesados"
+echo "Lleva datos de pacientes (XML/PDF): pásalo por USB o carpeta compartida interna, no por correo."

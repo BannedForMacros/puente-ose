@@ -20,10 +20,11 @@ from datetime import date
 from pathlib import Path
 
 from sovos_bridge import __version__
-from sovos_bridge.config import Settings, load_settings
+from sovos_bridge.config import Settings, env_path, load_settings
 from sovos_bridge.logging_setup import setup_logging
 from sovos_bridge.service.operations import daily_report, retry_errors, status_text
 from sovos_bridge.service.pipeline import Pipeline
+from sovos_bridge.service.configuracion import pendientes
 from sovos_bridge.service.runner import Service
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.sovos import SovosClient, build_token_provider
@@ -136,10 +137,15 @@ def _dispatch(args, s: Settings, db: Database) -> int:
         print("\n".join(acciones) if acciones else "No hay comprobantes para reintentar")
         return 0
 
-    client = None if s.dry_run else _client(s)
+    # Sin credenciales de Sovos el servicio igual arranca: se cargan desde el panel.
+    sin_sovos = any(x.clave == "sovos" for x in pendientes(s))
+    client = None if s.dry_run or sin_sovos else _client(s)
     pipeline = Pipeline(s, db, client)
 
     if args.cmd == "send":
+        if pipeline.problema_firma or sin_sovos:
+            print("Falta configuración:", pipeline.problema_firma or "conexión con Sovos")
+            return 2
         if not args.archivo.exists():
             print(f"No existe el archivo {args.archivo}")
             return 2
@@ -153,12 +159,22 @@ def _dispatch(args, s: Settings, db: Database) -> int:
         return 0 if r.estado in ("ENVIADO", "DRY_RUN") else 1
 
     if args.cmd == "run":
-        poller = None if s.dry_run else StatusPoller(s, db, client)
-        Service(s, pipeline, poller, PanelApp(s, db, client, poller)).run()
+        poller = None if client is None else StatusPoller(s, db, client)
+        panel = PanelApp(s, db, client, poller)
+        panel.attach(env_file=env_path(args.env))
+        Service(s, pipeline, poller, panel, env_file=args.env, client_factory=_client).run()
         return 0
 
     if args.cmd == "ui":
-        panel = start_panel(PanelApp(s, db, client))
+        app = PanelApp(s, db, client)
+
+        def _reload() -> None:
+            s2 = load_settings(args.env, override=True)
+            ok = not s2.dry_run and not any(x.clave == "sovos" for x in pendientes(s2))
+            app.apply(s2, _client(s2) if ok else None, None)
+
+        app.attach(env_file=env_path(args.env), reload=_reload)
+        panel = start_panel(app)
         if panel is None:
             return 2
         print(f"Panel web en http://{'localhost' if s.ui_host in ('127.0.0.1', 'localhost') else s.ui_host}"

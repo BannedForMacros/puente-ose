@@ -90,9 +90,15 @@ def test_pipeline_con_firma_propia(settings, db, fake, tmp_path):
     XMLVerifier().verify(legal, x509_cert=cert.public_bytes(Encoding.PEM).decode())
 
 
-def test_firma_propia_sin_certificado_no_arranca(settings, db):
-    with pytest.raises(SigningError, match="CERT_PATH"):
-        Pipeline(settings.model_copy(update={"sovos_signing_mode": "propio"}), db, None)
+def test_firma_propia_sin_certificado_no_envia(settings, db):
+    # El servicio sigue vivo (para cargar el certificado desde el panel) pero no procesa nada.
+    p = Pipeline(settings.model_copy(update={"sovos_signing_mode": "propio"}), db, None)
+    assert p.signer is None and "certificado" in p.problema_firma
+    txt = settings.inbox_dir / "20437310841-03-BT05-00000001.txt"
+    txt.write_text("IDE|", encoding="utf-8")
+    with pytest.raises(SigningError):
+        p.process(txt)
+    assert txt.exists()
 
 
 def test_reexportar_con_cifrado_clasico(tmp_path):

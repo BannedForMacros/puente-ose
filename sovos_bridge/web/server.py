@@ -32,8 +32,9 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from sovos_bridge import __version__
-from sovos_bridge.config import Settings
+from sovos_bridge.config import Settings, env_path
 from sovos_bridge.service.bandeja import EN_BANDEJA, Bandeja
+from sovos_bridge.service.configuracion import ConfigError, Configuracion, pendientes
 from sovos_bridge.service.operations import REPORT_COLUMNS, RETRYABLE, retry_errors, retry_one
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.sovos import SovosClient, SovosError, parse_notifications
@@ -49,6 +50,8 @@ MAX_BODY = 64_000
 MAX_UPLOAD_BODY = 30 * 1024 * 1024
 HEARTBEAT_STALE_SECONDS = 120
 FILE_KINDS = {"txt": "archivo", "xml": "xml_path", "pdf": "pdf_path", "sbd": "sbd_path"}
+_CONFIG_ACTIONS = {"certificado", "sovos", "carpeta", "clave"}
+MAX_CONFIG_BODY = 1024 * 1024
 _BANDEJA_ACTIONS = {"liberar", "fecha", "separar", "descartar", "traer-rechazados"}
 _CARGA_ROUTE = re.compile(r"^/api/cargas/(\d+)\.csv$")
 _DOC_ROUTE = re.compile(r"^/api/documents/([^/]+)(?:/(retry|consultar|archivo/(txt|xml|pdf|sbd)))?$")
@@ -87,6 +90,30 @@ class PanelApp:
         self.client = client
         self.poller = poller or (StatusPoller(settings, db, client) if client else None)
         self._sovos_lock = threading.Lock()
+        self.env_file = env_path(None)
+        self.lock: threading.RLock = threading.RLock()
+        self._reload = lambda: None
+        self._problema_firma = lambda: ""
+
+    def attach(self, *, lock=None, reload=None, problema_firma=None, env_file=None) -> None:
+        """Lo conecta el servicio: recarga en caliente y estado de la firma."""
+        if lock is not None:
+            self.lock = lock
+        if reload is not None:
+            self._reload = reload
+        if problema_firma is not None:
+            self._problema_firma = problema_firma
+        if env_file is not None:
+            self.env_file = Path(env_file)
+
+    def apply(self, settings: Settings, client: SovosClient | None, poller: StatusPoller | None) -> None:
+        self.s, self.client = settings, client
+        self.poller = poller or (StatusPoller(settings, self.db, client) if client else None)
+
+    def auth_expected(self) -> str:
+        """Cabecera Basic esperada; se lee en cada pedido para que un cambio de clave rija al instante."""
+        pw = self.s.ui_password.get_secret_value()
+        return base64.b64encode(f"{self.s.ui_user}:{pw}".encode()).decode() if pw else ""
 
     # --- lecturas -----------------------------------------------------------
     def summary(self) -> dict[str, Any]:
@@ -106,6 +133,7 @@ class PanelApp:
                          if last_beat else None},
             "bandeja": len(inbox),
             "preparacion": len(self.db.staged(*EN_BANDEJA)),
+            "config_pendiente": [x.__dict__ for x in pendientes(self.s, self._problema_firma())],
             "estados": {e.value: counts.get(e.value, 0) for e in Estado},
             "hoy": {"aprobados": len(aprobados_hoy),
                     "monto": f"{sum(_num(r['importe_total']) for r in aprobados_hoy):.2f}"},
@@ -220,6 +248,9 @@ class PanelApp:
         if action != "traer-rechazados" and not claves:
             raise PanelError(HTTPStatus.BAD_REQUEST, "No se eligió ningún comprobante")
         tray = Bandeja(self.s, self.db)
+        if action == "liberar" and any(x.clave == "carpeta" for x in pendientes(self.s)):
+            raise PanelError(HTTPStatus.CONFLICT,
+                             "Primero indica en Configuración la carpeta donde el sistema deja los TXT")
         if action == "liberar":
             r = tray.release(claves, usuario, incluir_sin_referencia=bool(body.get("incluir_sin_referencia")),
                              incluir_separados=bool(body.get("incluir_separados")))
@@ -233,6 +264,73 @@ class PanelApp:
             r = tray.bring_back_rejected_by_date(usuario)
         log.info("Panel: bandeja %s por %s, %d hechos, %d omitidos", action, usuario, len(r.hechos), len(r.omitidos))
         return r.as_dict()
+
+    # --- configuración ---------------------------------------------------------
+    def _config(self) -> Configuracion:
+        return Configuracion(self.s, self.env_file, self._reload, self._problema_firma)
+
+    def config(self) -> dict[str, Any]:
+        return self._config().estado()
+
+    def config_action(self, action: str, body: dict[str, Any], usuario: str) -> dict[str, Any]:
+        responsable = " ".join(str(body.get("responsable") or "").split())[:80]
+        if not responsable:
+            raise PanelError(HTTPStatus.BAD_REQUEST, "Indica quién hace el cambio: queda en el registro")
+        usuario = responsable if usuario in ("", "local", responsable) else f"{responsable} (acceso {usuario})"
+        cfg = self._config()
+        try:
+            if action == "certificado":
+                r = cfg.guardar_certificado(str(body.get("contenido") or ""), str(body.get("nombre") or ""),
+                                            str(body.get("clave") or ""), usuario)
+            elif action == "sovos":
+                r = cfg.guardar_sovos(str(body.get("ambiente") or ""), str(body.get("client_id") or ""),
+                                      str(body.get("client_secret") or ""), usuario)
+            elif action == "clave":
+                cfg.cambiar_clave_panel(str(body.get("nueva") or ""), usuario)
+                r = {}
+            elif body.get("accion") == "revisar":
+                r = cfg.revisar_carpeta(str(body.get("ruta") or ""))
+            else:
+                r = self._guardar_carpeta(cfg, str(body.get("ruta") or ""), body.get("existentes"), usuario)
+        except ConfigError as exc:
+            raise PanelError(HTTPStatus.BAD_REQUEST, str(exc)) from None
+        return {**r, "estado": self._config().estado()}
+
+    def _guardar_carpeta(self, cfg: Configuracion, ruta: str, existentes: Any, usuario: str) -> dict[str, Any]:
+        """Si la carpeta ya tiene TXT, se pasan a la bandeja (recomendado) antes de vigilarla:
+        si no, el servicio los enviaría todos sin revisar (fechas vencidas, inafectos...)."""
+        carpeta = cfg.revisar_carpeta(ruta)
+        if carpeta["txt"] and existentes not in ("bandeja", "dejar"):
+            return {"decision": True, **carpeta}
+        with self.lock:
+            importados = self._importar_carpeta(Path(carpeta["ruta"]), usuario) \
+                if carpeta["txt"] and existentes == "bandeja" else None
+            r = cfg.guardar_carpeta(ruta, usuario)
+        return {**r, "importados": importados}
+
+    def _importar_carpeta(self, carpeta: Path, usuario: str) -> dict[str, Any]:
+        archivos = sorted(f for f in carpeta.iterdir() if f.is_file() and f.suffix.lower() == ".txt")
+        destino = self.s.work_dir / "importados" / datetime.now().strftime("%Y%m%d_%H%M%S")
+        destino.mkdir(parents=True, exist_ok=True)
+        cuenta = {"en_bandeja": 0, "separados": 0, "no_subidos": 0, "cargas": []}
+        for i in range(0, len(archivos), upload.MAX_FILES):
+            lote = archivos[i:i + upload.MAX_FILES]
+            checks, carga_id = upload.enqueue(self.s, self.db, [
+                {"nombre": f.name, "contenido": base64.b64encode(f.read_bytes()).decode()} for f in lote],
+                usuario=usuario, origen=f"carpeta {carpeta}")
+            cuenta["cargas"].append(carga_id)
+            for c in checks:
+                if c.encolable:
+                    cuenta["en_bandeja"] += 1
+                    cuenta["separados"] += c.mensajes[0].startswith("Separado")
+                else:
+                    cuenta["no_subidos"] += 1
+            for f in lote:   # el original queda guardado aparte; la carpeta vigilada queda limpia
+                f.replace(destino / f.name)
+        log.info("Configuración: %d TXT de %s pasados a la bandeja por %s (originales en %s)",
+                 cuenta["en_bandeja"], carpeta, usuario, destino)
+        cuenta["originales"] = str(destino)
+        return cuenta
 
     def uploads(self) -> dict[str, Any]:
         return {"cargas": [self._carga(r) for r in self.db.uploads(20)]}
@@ -318,8 +416,7 @@ class PanelApp:
 
 
 # --- transporte HTTP --------------------------------------------------------
-def make_handler(app: PanelApp, user: str, password: str):
-    expected = base64.b64encode(f"{user}:{password}".encode()).decode() if password else ""
+def make_handler(app: PanelApp):
 
     class Handler(BaseHTTPRequestHandler):
         server_version = f"PuenteSovos/{__version__}"
@@ -337,7 +434,7 @@ def make_handler(app: PanelApp, user: str, password: str):
 
         def _dispatch(self, method: str) -> None:
             try:
-                if expected and not self._authorized():
+                if app.auth_expected() and not self._authorized():
                     self._send(HTTPStatus.UNAUTHORIZED, b"Se requiere usuario y clave",
                                "text/plain; charset=utf-8",
                                {"WWW-Authenticate": 'Basic realm="Puente Sovos", charset="UTF-8"'})
@@ -369,6 +466,10 @@ def make_handler(app: PanelApp, user: str, password: str):
                                   {"Content-Disposition": f'attachment; filename="{name}"'})
             if method == "POST" and path == "/api/upload":
                 return self._json(app.upload(self._body(MAX_UPLOAD_BODY), self._user(), self.client_address[0]))
+            if method == "GET" and path == "/api/config":
+                return self._json(app.config())
+            if method == "POST" and path.startswith("/api/config/") and path[12:] in _CONFIG_ACTIONS:
+                return self._json(app.config_action(path[12:], self._body(MAX_CONFIG_BODY), self._user()))
             if method == "GET" and path == "/api/bandeja":
                 return self._json(app.bandeja())
             if method == "POST" and path.startswith("/api/bandeja/") and path[13:] in _BANDEJA_ACTIONS:
@@ -403,7 +504,7 @@ def make_handler(app: PanelApp, user: str, password: str):
         # --- utilidades -------------------------------------------------
         def _authorized(self) -> bool:
             header = self.headers.get("Authorization", "")
-            return header.startswith("Basic ") and hmac.compare_digest(header[6:].strip(), expected)
+            return header.startswith("Basic ") and hmac.compare_digest(header[6:].strip(), app.auth_expected())
 
         def _user(self) -> str:
             """Usuario de HTTP Basic, o "local" si el panel se abrió en el mismo equipo sin clave."""
@@ -467,7 +568,7 @@ def start_panel(app: PanelApp) -> tuple[ThreadingHTTPServer, threading.Thread] |
         log.error("Panel web NO iniciado: UI_HOST=%s expone datos de pacientes en la red y UI_PASSWORD "
                   "está vacío. Defina UI_PASSWORD o use UI_HOST=127.0.0.1", s.ui_host)
         return None
-    server = ThreadingHTTPServer((s.ui_host, s.ui_port), make_handler(app, s.ui_user, password))
+    server = ThreadingHTTPServer((s.ui_host, s.ui_port), make_handler(app))
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, name="panel", daemon=True)
     thread.start()

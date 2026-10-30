@@ -183,6 +183,8 @@ function renderSummary(s) {
     countTo(b.querySelector("[data-count]"), n, first);
   });
 
+  renderConfigBanner(s.config_pendiente || []);
+  if (first && (s.config_pendiente || []).length) showView("config");
   const tc = $("tab-tray-count");
   tc.hidden = !s.preparacion;
   tc.textContent = (s.preparacion || 0).toLocaleString("es-PE");
@@ -889,7 +891,9 @@ function bindGlobalDrop() {
   const reviewing = () => !$("upload").hidden && upload.results.length > 0 && !upload.done;
   const show = (on) => {
     if (on) {
-      overlay.querySelector("strong").textContent = reviewing() ? "Suelta para agregarlos a la revisión" : "Suelta para revisar los TXT";
+      overlay.querySelector("strong").textContent = currentView() === "config" && $("upload").hidden
+        ? "Suelta el certificado (.pfx o .p12)"
+        : reviewing() ? "Suelta para agregarlos a la revisión" : "Suelta para revisar los TXT";
       overlay.hidden = false;
       requestAnimationFrame(() => overlay.classList.add("is-on"));
     } else {
@@ -918,6 +922,10 @@ function bindGlobalDrop() {
     depth = 0;
     show(false);
     if (upload.busy || !$("modal").hidden || !$("date-modal").hidden) return;
+    if (currentView() === "config" && $("upload").hidden) {
+      const f = [...e.dataTransfer.files].find((x) => /\.(pfx|p12)$/i.test(x.name));
+      if (f) { setCertFile(f); return; }
+    }
     const append = reviewing();
     const pending = droppedFiles(e.dataTransfer);
     if ($("upload").hidden) openUpload();
@@ -928,18 +936,21 @@ function bindGlobalDrop() {
 
 // --- vistas -----------------------------------------------------------------
 const VIEW_KEY = "puente.vista";
-function currentView() { return $("view-tray").hidden ? "docs" : "tray"; }
+const VIEWS = ["tray", "docs", "config"];
+function currentView() { return VIEWS.find((v) => !$(`view-${v}`).hidden) || "docs"; }
 function showView(view) {
-  const isTray = view === "tray";
-  $("view-tray").hidden = !isTray;
-  $("view-docs").hidden = isTray;
-  $("tab-tray").setAttribute("aria-selected", String(isTray));
-  $("tab-docs").setAttribute("aria-selected", String(!isTray));
-  const page = isTray ? $("view-tray") : $("view-docs");
+  if (!VIEWS.includes(view)) view = "docs";
+  VIEWS.forEach((v) => {
+    $(`view-${v}`).hidden = v !== view;
+    $(`tab-${v}`).setAttribute("aria-selected", String(v === view));
+  });
+  const page = $(`view-${view}`);
   page.classList.add("is-entering");
   setTimeout(() => page.classList.remove("is-entering"), 400);
   try { localStorage.setItem(VIEW_KEY, view); } catch { /* sin almacenamiento */ }
-  if (isTray) { $("tray-who").value = $("tray-who").value || storedWho(); loadTray(); }
+  if (state.summary) renderConfigBanner(state.summary.config_pendiente || []);
+  if (view === "tray") { $("tray-who").value = $("tray-who").value || storedWho(); loadTray(); }
+  else if (view === "config") { $("config-who").value = $("config-who").value || storedWho(); loadConfig(); }
   else loadRows({ silent: true });
 }
 
@@ -1416,6 +1427,194 @@ function bindTray() {
   });
 }
 
+// --- configuración ----------------------------------------------------------
+// Certificado, conexión con Sovos, carpeta de TXT y clave del panel. El servidor
+// valida todo antes de guardar y lo aplica sin reiniciar.
+const cfg = { estado: null, certFile: null };
+const CFG_NOMBRE = { certificado: "el certificado digital", sovos: "la conexión con Sovos", carpeta: "la carpeta de TXT" };
+
+function configWho() {
+  const v = $("config-who").value.trim().replace(/\s+/g, " ");
+  $("config-who-field").classList.toggle("is-invalid", !v);
+  if (!v) { $("config-who").focus(); toast("Escribe quién hace el cambio: queda en el registro", "warn"); return null; }
+  rememberWho(v);
+  return v;
+}
+
+function renderConfigBanner(pend) {
+  const has = pend.length > 0;
+  $("config-banner").hidden = !has || currentView() === "config";
+  $("tab-config-dot").hidden = !has;
+  if (has) {
+    const items = pend.map((p) => CFG_NOMBRE[p.clave] || p.texto);
+    $("config-banner-text").textContent = `Falta ${items.length > 1 ? `${items.slice(0, -1).join(", ")} y ${items[items.length - 1]}` : items[0]}.`;
+  }
+}
+
+async function loadConfig() {
+  try {
+    cfg.estado = await api("/api/config");
+    renderConfig();
+  } catch (err) { toast(err.message, "bad"); }
+}
+
+function renderConfig() {
+  const d = cfg.estado;
+  if (!d) return;
+  const falta = new Set(d.pendientes.map((p) => p.clave));
+  const c = d.certificado;
+  $("card-cert").dataset.state = falta.has("certificado") ? "falta" : "ok";
+  $("cert-badge").innerHTML = falta.has("certificado") ? pill("Falta", "warn")
+    : c.dias <= 30 ? pill(`Vence en ${c.dias} días`, "warn") : pill("Vigente", "ok");
+  $("cert-facts").innerHTML = (c.serie ? `
+      <dt>Titular</dt><dd>${esc(c.titular)}</dd>
+      <dt>Serie</dt><dd>${esc(c.serie)}</dd>
+      <dt>Vigencia</dt><dd>${fmtDate(c.vigente_desde)} al ${fmtDate(c.vence)}, quedan ${c.dias.toLocaleString("es-PE")} días</dd>` : "")
+    + (c.problema ? `<dt>Problema</dt><dd>${esc(c.problema)}</dd>` : "");
+  $("cert-save").textContent = c.serie ? "Reemplazar certificado" : "Validar y guardar";
+
+  const sv = d.sovos;
+  $("card-sovos").dataset.state = falta.has("sovos") ? "falta" : "ok";
+  $("sovos-badge").innerHTML = falta.has("sovos") ? pill("Falta", "warn")
+    : pill(sv.ambiente === "pruebas" ? "Pruebas" : "Producción", sv.ambiente === "pruebas" ? "info" : "ok");
+  if (sv.ambiente === "produccion" || sv.ambiente === "pruebas") $("sovos-amb").value = sv.ambiente;
+  if (!$("sovos-id").value) $("sovos-id").value = sv.client_id || "";
+  $("sovos-secret").placeholder = sv.secret_guardado ? "Guardado. Escríbelo solo si cambió" : "";
+
+  const dir = d.carpeta;
+  $("card-dir").dataset.state = falta.has("carpeta") ? "falta" : "ok";
+  $("dir-badge").innerHTML = falta.has("carpeta") ? pill("Falta", "warn")
+    : pill(dir.txt ? `${dir.txt.toLocaleString("es-PE")} TXT por tomar` : "Vigilando", "ok");
+  if (!$("dir-path").value) $("dir-path").value = dir.ruta || "";
+
+  $("access-user").textContent = d.panel.usuario;
+  $("access-urls").innerHTML = d.panel.urls.map((u) => `<li>
+      <a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a>
+      <small>${esc(u.donde)}</small>
+      <button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(u.url)}">Copiar</button></li>`).join("");
+  renderConfigBanner(d.pendientes);
+}
+
+function formError(id, msg) {
+  const el = $(id);
+  el.hidden = !msg;
+  el.textContent = msg || "";
+}
+
+function setCertFile(f) {
+  if (!f) return;
+  if (!/\.(pfx|p12)$/i.test(f.name)) { formError("cert-error", "El certificado debe ser un archivo .pfx o .p12"); return; }
+  cfg.certFile = f;
+  formError("cert-error", "");
+  $("cert-file-name").textContent = `${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`;
+  $("cert-pick").classList.add("has-file");
+  $("cert-pass").focus();
+}
+
+async function configPost(action, body, btn, errId) {
+  const who = configWho();
+  if (!who) return null;
+  formError(errId, "");
+  busy(btn, true);
+  try {
+    const r = await api(`/api/config/${action}`, { method: "POST", body: { ...body, responsable: who } });
+    if (r.estado) { cfg.estado = r.estado; renderConfig(); }
+    loadSummary();
+    return r;
+  } catch (err) {
+    formError(errId, err.message);
+    return null;
+  } finally { busy(btn, false); }
+}
+
+async function saveCert(e) {
+  e.preventDefault();
+  if (!cfg.certFile) { formError("cert-error", "Elige el archivo del certificado (.pfx o .p12)"); return; }
+  const clave = $("cert-pass").value;
+  if (!clave) { formError("cert-error", "Escribe la contraseña del certificado"); $("cert-pass").focus(); return; }
+  const contenido = await readAsBase64(cfg.certFile);
+  const r = await configPost("certificado", { contenido, nombre: cfg.certFile.name, clave }, $("cert-save"), "cert-error");
+  if (!r) return;
+  $("cert-pass").value = "";
+  cfg.certFile = null;
+  $("cert-file").value = "";
+  $("cert-pick").classList.remove("has-file");
+  $("cert-file-name").textContent = "Elige o suelta el archivo .pfx o .p12";
+  toast(`Certificado de ${r.titular} cargado; vence el ${fmtDate(r.vence)}${r.avisos.length ? `. ${r.avisos.join(". ")}` : ""}`, r.avisos.length ? "warn" : "ok");
+}
+
+async function saveSovos(e) {
+  e.preventDefault();
+  const id = $("sovos-id").value.trim();
+  const secret = $("sovos-secret").value.trim();
+  if (!id) { formError("sovos-error", "Escribe el Client ID"); $("sovos-id").focus(); return; }
+  if (!secret && !cfg.estado?.sovos.secret_guardado) { formError("sovos-error", "Escribe el Client Secret"); $("sovos-secret").focus(); return; }
+  const amb = $("sovos-amb").value;
+  const r = await configPost("sovos", { ambiente: amb, client_id: id, client_secret: secret }, $("sovos-save"), "sovos-error");
+  if (!r) return;
+  $("sovos-secret").value = "";
+  toast(`Sovos aceptó las credenciales; conexión de ${amb === "pruebas" ? "pruebas" : "producción"} guardada`);
+}
+
+async function saveDir(e) {
+  e.preventDefault();
+  const ruta = $("dir-path").value.trim();
+  if (!ruta) { formError("dir-error", "Escribe la ruta de la carpeta"); $("dir-path").focus(); return; }
+  let r = await configPost("carpeta", { ruta }, $("dir-save"), "dir-error");
+  if (!r) return;
+  if (r.decision) {
+    const answer = await confirmModal({
+      title: `La carpeta ya tiene ${fmtCount(r.txt, "TXT", "TXT")}`,
+      html: `<p>Si el servicio empieza a vigilarla así, los enviaría todos de inmediato, sin revisar fechas vencidas ni separar inafectos y exonerados.</p>
+             <p><strong>Recomendado:</strong> pasarlos a la bandeja para decidir ahí qué se envía, en qué orden y con qué fecha. Los originales se guardan aparte.</p>`,
+      ok: "Continuar",
+      check: { text: "Prefiero que se envíen tal cual, sin pasar por la bandeja" },
+    });
+    if (!answer) return;
+    r = await configPost("carpeta", { ruta, existentes: answer.checked ? "dejar" : "bandeja" }, $("dir-save"), "dir-error");
+    if (!r) return;
+  }
+  const imp = r.importados;
+  if (imp) {
+    toast(`${fmtCount(imp.en_bandeja, "TXT pasó", "TXT pasaron")} a la bandeja${imp.separados ? ` (${imp.separados} separados)` : ""}`
+      + `${imp.no_subidos ? `, ${imp.no_subidos} no se pudieron subir: ver la constancia` : ""}`, imp.no_subidos ? "warn" : "ok");
+    showView("tray");
+  } else {
+    toast("Carpeta guardada: el servicio ya la está vigilando");
+  }
+}
+
+async function savePass(e) {
+  e.preventDefault();
+  const nueva = $("pass-new").value;
+  if (nueva.length < 8) { formError("pass-error", "La clave debe tener al menos 8 caracteres"); $("pass-new").focus(); return; }
+  const r = await configPost("clave", { nueva }, $("pass-save"), "pass-error");
+  if (!r) return;
+  $("pass-new").value = "";
+  toast("Clave cambiada. El navegador te la pedirá de nuevo");
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const t = document.createElement("textarea");
+    t.value = text; document.body.appendChild(t); t.select();
+    document.execCommand("copy"); t.remove();
+  }
+  toast(`Copiado: ${text}`);
+}
+
+function bindConfig() {
+  $("config-who").addEventListener("input", () => $("config-who-field").classList.remove("is-invalid"));
+  $("cert-file").addEventListener("change", (e) => setCertFile(e.target.files[0]));
+  $("cert-form").addEventListener("submit", saveCert);
+  $("sovos-form").addEventListener("submit", saveSovos);
+  $("dir-form").addEventListener("submit", saveDir);
+  $("pass-form").addEventListener("submit", savePass);
+  $("access-urls").addEventListener("click", (e) => { const b = e.target.closest("[data-copy]"); if (b) copyText(b.dataset.copy); });
+  document.querySelectorAll("[data-view-go]").forEach((b) => b.addEventListener("click", () => showView(b.dataset.viewGo)));
+}
+
 // --- eventos ----------------------------------------------------------------
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
@@ -1479,6 +1678,7 @@ function refreshLoop() {
     if (document.hidden || !$("modal").hidden || !$("upload").hidden || !$("date-modal").hidden) return;
     loadSummary();
     if (currentView() === "tray") { loadTray({ silent: true }); return; }
+    if (currentView() === "config") return;
     loadRows({ silent: true });
     if (state.openClave) showDetail(state.openClave);
   }, REFRESH_MS);
@@ -1488,6 +1688,7 @@ function refreshLoop() {
 bind();
 bindUpload();
 bindTray();
+bindConfig();
 syncSortHeaders();
 loadSummary();
 (() => {
