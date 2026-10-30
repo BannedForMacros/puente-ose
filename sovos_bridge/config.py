@@ -36,6 +36,10 @@ class Settings(BaseModel):
 
     emisor_ruc: str = "20437310841"
     forma_pago_defecto: str = "Contado"
+    # Días calendario, desde el día siguiente a la emisión, para que SUNAT reciba el comprobante.
+    # Facturas y sus notas: 3. Boletas y sus notas: según lo indicado por contabilidad.
+    plazo_factura_dias: int = Field(3, ge=0)
+    plazo_boleta_dias: int = Field(30, ge=0)
 
     inbox_dir: Path = Path("inbox")
     work_dir: Path = Path("work")
@@ -91,6 +95,11 @@ class Settings(BaseModel):
         return self.work_dir / "sbd"
 
     @property
+    def bandeja_dir(self) -> Path:
+        """TXT subidos desde el panel que esperan a ser liberados (originales, sin cambios)."""
+        return self.work_dir / "bandeja"
+
+    @property
     def logs_dir(self) -> Path:
         return self.work_dir / "logs"
 
@@ -106,7 +115,7 @@ class Settings(BaseModel):
         for d in (
             self.inbox_dir, self.processing_dir, self.processed_dir, self.error_dir,
             self.duplicates_dir, self.output_dir, self.sbd_dir, self.logs_dir,
-            self.reports_dir, self.db_path.parent,
+            self.reports_dir, self.db_path.parent, self.bandeja_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
         if self.dry_run:

@@ -7,6 +7,7 @@ import signal
 import threading
 
 from sovos_bridge.config import Settings
+from sovos_bridge.service.bandeja import Bandeja
 from sovos_bridge.service.pipeline import Pipeline
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.service.watcher import InboxWatcher
@@ -23,6 +24,7 @@ class Service:
         self.poller = poller
         self.panel = panel
         self.watcher = InboxWatcher(settings.inbox_dir, settings.file_stable_seconds)
+        self.bandeja = Bandeja(settings, pipeline.db)
         self.stop_event = threading.Event()
 
     def _heartbeat(self) -> None:
@@ -35,6 +37,11 @@ class Service:
     def inbox_loop(self) -> None:
         while not self.stop_event.is_set():
             self._heartbeat()
+            try:
+                # Notas liberadas que esperaban a su comprobante: pasan a la cola si ya fue aprobado.
+                self.bandeja.release_waiting()
+            except Exception:
+                log.exception("Error revisando las notas que esperan en la bandeja")
             try:
                 for path in self.watcher.ready_files():
                     if self.stop_event.is_set():

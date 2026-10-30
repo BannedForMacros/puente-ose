@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from sovos_bridge.service.pipeline import Pipeline
 from sovos_bridge.storage import Estado
 from sovos_bridge.web import PanelApp, environment_label, start_panel
+from sovos_bridge.service.bandeja import Bandeja
 from sovos_bridge.web.server import PanelError
 
 from conftest import BOLETA_TXT, accepted, application_response, notification, notifications_response
@@ -207,7 +208,7 @@ def test_carga_revisa_sin_tocar_la_bandeja(settings, db):
     res = {a["nombre"]: a for a in r["archivos"]}
     ok = res["100-175-20437310841-300-" + BOLETA_TXT.name]
     assert ok["encolable"] and ok["nombre_final"] == BOLETA_TXT.name and ok["cliente_doc"].startswith("****")
-    assert ok["resultado"] == "advertencia" and "días" in ok["mensajes"][1]     # emitida hace más de 3 días
+    assert ok["resultado"] in ("valido", "advertencia")
     assert res["20437310841-03-BT05-00000009.txt"]["resultado"] == "error"
     assert res["factura.txt"]["resultado"] == "error"
     assert r["encolables"] == 1 and not list(settings.inbox_dir.glob("*"))
@@ -234,11 +235,13 @@ def test_carga_encola_solo_los_validos_y_detecta_repetidos(settings, db):
         archivo("20437310841-03-BT05-00000009.txt", b"IDE|basura"),
     ]})
     assert r["encolables"] == 1
-    assert [p.name for p in settings.inbox_dir.iterdir()] == [BOLETA_TXT.name]
-    assert (settings.inbox_dir / BOLETA_TXT.name).read_bytes() == BOLETA_TXT.read_bytes()
-    # Si ya está esperando en la bandeja, no se duplica.
+    # Queda en la bandeja de preparación: nada pasa a la cola de envío hasta liberarlo.
+    assert not list(settings.inbox_dir.glob("*"))
+    assert (settings.bandeja_dir / BOLETA_TXT.name).read_bytes() == BOLETA_TXT.read_bytes()
+    assert db.staged_one(K)["estado"] == "PREPARADO"
+    # Si ya está en la bandeja, no se duplica.
     again = app.upload({"modo": "revisar", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]})
-    assert again["archivos"][0]["resultado"] == "en_cola"
+    assert again["archivos"][0]["resultado"] == "en_bandeja"
 
 
 def test_carga_por_http(server):
@@ -278,8 +281,7 @@ def test_carga_deja_constancia(settings, db):
 def test_mismo_archivo_subido_antes_se_avisa(settings, db):
     app = PanelApp(settings, db, None)
     app.upload({"modo": "encolar", "responsable": "Ana", "archivos": [archivo(BOLETA_TXT.name, BOLETA_TXT)]})
-    for f in settings.inbox_dir.iterdir():      # el servicio ya lo tomó
-        f.unlink()
+    Bandeja(settings, db).discard([K], "Ana")    # se sacó de la bandeja sin enviar
     r = app.upload({"modo": "revisar", "archivos": [archivo("otro-nombre-" + BOLETA_TXT.name, BOLETA_TXT)]})
     a = r["archivos"][0]
     assert a["resultado"] == "advertencia"

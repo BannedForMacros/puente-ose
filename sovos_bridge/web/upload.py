@@ -2,8 +2,9 @@
 
 Cada archivo pasa por las mismas reglas que el servicio (nombre, parser,
 validador) y se cruza con la base para no reenviar lo que Sovos ya tiene.
-Encolar solo deja el TXT en la bandeja: el servicio lo envía como cualquier
-otro, con su control de duplicados.
+Confirmar deja los TXT en la bandeja de preparación (service/bandeja.py): nada
+sale a Sovos hasta liberarlos desde el panel, donde se separan especiales, se
+corrige la fecha de lo vencido y las notas esperan a su comprobante.
 
 Además del número de comprobante, cada archivo se identifica por su huella
 SHA-256: así se detecta si es exactamente el mismo archivo subido antes o si
@@ -18,19 +19,19 @@ import binascii
 import hashlib
 import os
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from sovos_bridge.config import Settings
 from sovos_bridge.logging_setup import mask_doc
 from sovos_bridge.parser import ParseError, parse_filename, parse_text, standard_name
 from sovos_bridge.parser.tokenizer import decode_bytes
+from sovos_bridge.service import bandeja as bj
 from sovos_bridge.storage import Database, Estado
 from sovos_bridge.validation import validate
 
 MAX_FILES = 500
 MAX_FILE_BYTES = 512 * 1024
-DIAS_AVISO = 3   # boletas con más días desde la emisión: aviso de plazo SUNAT
 
 # Estados en los que Sovos ya tiene el comprobante: no se vuelve a encolar.
 YA_EN_SOVOS = {Estado.APROBADO, Estado.ENVIADO, Estado.EN_PROCESO, Estado.DUPLICADO}
@@ -39,7 +40,7 @@ YA_EN_SOVOS = {Estado.APROBADO, Estado.ENVIADO, Estado.EN_PROCESO, Estado.DUPLIC
 @dataclass
 class FileCheck:
     nombre: str
-    resultado: str                     # valido | advertencia | error | ya_enviado | en_cola
+    resultado: str                     # valido | advertencia | error | ya_enviado | en_cola | en_bandeja
     nombre_final: str = ""
     clave: str = ""
     serie_numero: str = ""
@@ -52,6 +53,9 @@ class FileCheck:
     reenvio: bool = False              # ya existe con error/rechazo: el servicio lo reprocesa
     sha256: str = ""
     bytes: int = 0
+    especiales: list[str] = field(default_factory=list)
+    vence: str = ""                    # último día que SUNAT lo acepta con su fecha original
+    fuera_plazo: bool = False
     mensajes: list[str] = field(default_factory=list)
 
     @property
@@ -77,25 +81,25 @@ def check_files(s: Settings, db: Database, archivos: list[dict]) -> list[FileChe
 
 
 def enqueue(s: Settings, db: Database, archivos: list[dict], *, usuario: str = "",
-            origen: str = "") -> tuple[list[FileCheck], int]:
-    """Vuelve a revisar (el estado pudo cambiar), deja en la bandeja solo los encolables
-    y guarda la constancia de la carga. Devuelve las revisiones y el N.º de carga."""
+            origen: str = "", separar_especiales: bool = True) -> tuple[list[FileCheck], int]:
+    """Vuelve a revisar (el estado pudo cambiar), deja los válidos en la bandeja de
+    preparación y guarda la constancia de la carga. Devuelve las revisiones y el N.º de carga."""
     contenidos = {str(a.get("nombre") or ""): a.get("contenido") for a in archivos}
     checks = check_files(s, db, archivos)
-    s.inbox_dir.mkdir(parents=True, exist_ok=True)
+    usuario = usuario or "local"
+    carga_id = db.save_upload(usuario=usuario, origen=origen, archivos=[
+        {"nombre": c.nombre, "nombre_final": c.nombre_final, "clave": c.clave, "sha256": c.sha256,
+         "bytes": c.bytes, "encolado": c.encolable, "resultado": "en_bandeja" if c.encolable else c.resultado,
+         "detalle": "; ".join(c.mensajes)} for c in checks])
+    tray = bj.Bandeja(s, db)
     for c in checks:
         if not c.encolable:
             continue
-        data = _decode(contenidos[c.nombre])
-        final = s.inbox_dir / c.nombre_final
-        tmp = final.with_name(final.name + ".subiendo")   # el servicio solo toma *.txt
-        tmp.write_bytes(data)
-        os.replace(tmp, final)
-        c.mensajes.append("Dejado en la bandeja; el servicio lo enviará en la próxima revisión")
-    carga_id = db.save_upload(usuario=usuario or "local", origen=origen, archivos=[
-        {"nombre": c.nombre, "nombre_final": c.nombre_final, "clave": c.clave, "sha256": c.sha256,
-         "bytes": c.bytes, "encolado": c.encolable, "resultado": "encolado" if c.encolable else c.resultado,
-         "detalle": "; ".join(c.mensajes)} for c in checks])
+        estado = tray.add(data=_decode(contenidos[c.nombre]), nombre_final=c.nombre_final, doc=c._doc,
+                          sha256=c.sha256, separar=separar_especiales, carga_id=carga_id,
+                          cliente_doc=c.cliente_doc, usuario=usuario)
+        c.mensajes.insert(0, "Separado en la bandeja: no se envía hasta que lo liberes" if estado == bj.SEPARADO
+                          else "En la bandeja: se envía cuando lo liberes")
     return checks, carga_id
 
 
@@ -133,6 +137,7 @@ def _check_one(s: Settings, db: Database, nombre: str, contenido, en_cola: set[s
         return c
     c.fecha_emision, c.importe_total, c.moneda = doc.fecha_emision, doc.importe_total, doc.moneda
     c.cliente_doc = mask_doc(doc.cliente.numero_documento)
+    c._doc = doc            # para guardarlo en la bandeja; no viaja al panel
     v = validate(doc, info, s.emisor_ruc)
     if not v.ok:
         c.mensajes = v.errores + c.mensajes
@@ -154,6 +159,13 @@ def _check_one(s: Settings, db: Database, nombre: str, contenido, en_cola: set[s
     if prev is not None and prev["envio_incierto"]:
         c.mensajes.insert(0, "Tiene un envío previo incierto: resolverlo desde su detalle antes de subirlo")
         return c
+    staged = db.staged_one(info.clave)
+    if staged is not None and staged["estado"] in bj.EN_BANDEJA:
+        c.resultado = "en_bandeja"
+        c.mensajes.insert(0, "Ya está en la bandeja de preparación" + (
+            "" if staged["sha256"] == c.sha256 else
+            " con otro contenido: descártalo ahí primero si quieres reemplazarlo"))
+        return c
     if c.nombre_final.lower() in en_cola:
         c.resultado = "en_cola"
         c.mensajes.insert(0, "Ya hay un archivo con este comprobante esperando en la bandeja")
@@ -171,8 +183,19 @@ def _check_one(s: Settings, db: Database, nombre: str, contenido, en_cola: set[s
         c.dias_desde_emision = (date.today() - date.fromisoformat(doc.fecha_emision)).days
     except ValueError:
         pass
-    if c.dias_desde_emision is not None and c.dias_desde_emision > DIAS_AVISO:
-        avisos.insert(0, f"Emitido hace {c.dias_desde_emision} días: confirmar el plazo de envío con contabilidad")
+    try:
+        vence = date.fromisoformat(doc.fecha_emision) + timedelta(days=bj.plazo_dias(s, doc.serie_numero))
+        c.vence, c.fuera_plazo = vence.isoformat(), vence < date.today()
+        if c.fuera_plazo:
+            avisos.insert(0, f"Fuera de plazo: SUNAT lo aceptaba hasta el {vence:%d/%m/%Y}. "
+                             "En la bandeja podrás asignarle una fecha nueva")
+        elif vence == date.today():
+            avisos.insert(0, "Vence hoy: conviene enviarlo primero")
+    except ValueError:
+        pass
+    c.especiales = bj.especiales(doc)
+    if c.especiales:
+        avisos.append(f"Tiene {', '.join(c.especiales)}: se puede separar para no enviarlo todavía")
     c.mensajes += avisos
     c.resultado = "advertencia" if avisos else "valido"
     return c

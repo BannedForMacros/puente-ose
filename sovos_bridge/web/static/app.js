@@ -18,7 +18,7 @@ const TIPOS = { "01": "Factura", "03": "Boleta", "07": "Nota de crédito", "08":
 
 // Etapas del recorrido (secuencia real) y grupos que requieren atención.
 const STAGES = [
-  { key: "bandeja", name: "En bandeja", hint: "TXT por procesar", estados: null, tone: "idle" },
+  { key: "bandeja", name: "En cola", hint: "Saliendo hacia Sovos", estados: null, tone: "idle" },
   { key: "recibido", name: "Recibidos", hint: "Validando y armando", estados: ["RECIBIDO"], tone: "idle" },
   { key: "sovos", name: "En Sovos", hint: "Esperando a SUNAT", estados: ["ENVIADO", "EN_PROCESO"], tone: "info" },
   { key: "aprobado", name: "Aprobados", hint: "Aceptados por SUNAT", estados: ["APROBADO"], tone: "ok" },
@@ -183,6 +183,9 @@ function renderSummary(s) {
     countTo(b.querySelector("[data-count]"), n, first);
   });
 
+  const tc = $("tab-tray-count");
+  tc.hidden = !s.preparacion;
+  tc.textContent = (s.preparacion || 0).toLocaleString("es-PE");
   const pendientes = (s.estados.ERROR_CONEXION || 0) + (s.estados.RECHAZADO || 0) + (s.estados.VALIDACION_ERROR || 0);
   $("retry-all").disabled = pendientes === 0;
   syncGroupButtons();
@@ -258,7 +261,7 @@ function renderEmpty() {
     st.innerHTML = `
       <svg class="state-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/></svg>
       <h3>Todavía no hay comprobantes</h3>
-      <p>Cuando el sistema de facturación deje TXT en la bandeja, aparecerán aquí con su estado en Sovos y SUNAT.</p>`;
+      <p>Cuando se envíen comprobantes, aparecerán aquí con su estado en Sovos y SUNAT.</p>`;
   }
 }
 
@@ -556,14 +559,15 @@ async function retryAll(btn) {
 // Revisar no toca nada; al confirmar, el servidor deja los válidos en la bandeja
 // y guarda una constancia (quién, cuándo, desde qué equipo y la huella de cada archivo).
 const UPLOAD_CHUNK = 200;
-const MAX_UPLOAD = 500;
+const MAX_UPLOAD = 5000;
 const WHO_KEY = "puente.responsable";
 const RESULTADOS = {
   error:       { label: "Con error",        tone: "bad",  order: 0 },
   advertencia: { label: "Listo, con aviso", tone: "warn", order: 1 },
   valido:      { label: "Listo",            tone: "ok",   order: 2 },
   ya_enviado:  { label: "Ya enviado",       tone: "idle", order: 3 },
-  en_cola:     { label: "Ya en la bandeja", tone: "idle", order: 4 },
+  en_cola:     { label: "Ya en cola",       tone: "idle", order: 4 },
+  en_bandeja:  { label: "Ya en la bandeja", tone: "idle", order: 5 },
 };
 const upload = { files: [], results: [], done: false, busy: false, cargas: [], sent: new Set() };
 
@@ -602,8 +606,10 @@ function resetUpload() {
   $("upload-who").value = $("upload-who").value || storedWho();
   whoInvalid(false);
   $("upload-send").disabled = true;
-  $("upload-send").textContent = "Enviar a la bandeja";
-  $("upload-sub").textContent = "Se revisan antes de enviar: nada sale a Sovos hasta que confirmes.";
+  $("upload-send").textContent = "Pasar a la bandeja";
+  $("upload-separar-wrap").hidden = true;
+  $("upload-separar").checked = true;
+  $("upload-sub").textContent = "Se revisan y quedan en la bandeja: nada sale a Sovos hasta que los liberes.";
   serviceNote();
 }
 function serviceNote() {
@@ -611,10 +617,10 @@ function serviceNote() {
   const s = state.summary;
   if (s && !s.servicio.activo) {
     note.dataset.tone = "warn";
-    note.textContent = "El servicio de envío está detenido: los archivos esperarán en la bandeja hasta que se inicie.";
+    note.textContent = "El servicio de envío está detenido: podrás preparar la bandeja, pero nada saldrá hasta que se inicie.";
   } else {
     note.dataset.tone = "";
-    note.textContent = s ? `Al confirmar, el servicio los envía a Sovos (${s.ambiente}).` : "";
+    note.textContent = "Quedan en la bandeja. Ahí decides qué enviar, en qué orden y con qué fecha.";
   }
 }
 function whoInvalid(on) {
@@ -722,7 +728,7 @@ async function handleFiles(list, { append = false } = {}) {
     upload.files = [...byName.values()];
     prog.textContent = `Revisando ${plural(upload.files.length, "archivo", "archivos")}…`;
     $("upload-sub").textContent = prog.textContent;
-    upload.results = (await postChunks("revisar", upload.files)).archivos;
+    upload.results = markRepeated((await postChunks("revisar", upload.files)).archivos);
     $("upload-body").hidden = true;
     renderUpload();
 
@@ -742,15 +748,32 @@ async function handleFiles(list, { append = false } = {}) {
   }
 }
 
+// La revisión va en partes de UPLOAD_CHUNK: los repetidos entre partes se marcan aquí.
+function markRepeated(results) {
+  const seen = new Set();
+  results.forEach((r) => {
+    if (!r.clave || !r.encolable) return;
+    if (seen.has(r.clave)) {
+      Object.assign(r, { resultado: "error", encolable: false, mensajes: ["Repetido en esta misma carga", ...(r.mensajes || [])] });
+    }
+    seen.add(r.clave);
+  });
+  return results;
+}
+
 function renderUpload() {
   const res = [...upload.results].sort((a, b) => RESULTADOS[a.resultado].order - RESULTADOS[b.resultado].order);
   upload.results = res;
   const counts = {};
   res.forEach((r) => { counts[r.resultado] = (counts[r.resultado] || 0) + 1; });
   const queued = upload.done ? res.filter((r) => r.encolable && upload.sent.has(r.nombre)).length : 0;
-  $("upload-summary").innerHTML = (upload.done ? pill(`Dejados en la bandeja: ${queued}`, "info") : pill(`${plural(res.length, "archivo", "archivos")}`, "idle"))
+  const fuera = res.filter((r) => r.encolable && r.fuera_plazo).length;
+  const especiales = res.filter((r) => r.encolable && r.especiales && r.especiales.length).length;
+  $("upload-summary").innerHTML = (upload.done ? pill(`En la bandeja: ${queued}`, "info") : pill(`${plural(res.length, "archivo", "archivos")}`, "idle"))
     + Object.keys(RESULTADOS).filter((k) => counts[k])
-      .map((k) => pill(`${RESULTADOS[k].label}: ${counts[k]}`, RESULTADOS[k].tone)).join("");
+      .map((k) => pill(`${RESULTADOS[k].label}: ${counts[k]}`, RESULTADOS[k].tone)).join("")
+    + (!upload.done && fuera ? pill(`Fuera de plazo: ${fuera}`, "bad") : "")
+    + (!upload.done && especiales ? pill(`Inafecto, exonerado u otros: ${especiales}`, "warn") : "");
   $("upload-rows").innerHTML = res.map((r, i) => {
     const meta = RESULTADOS[r.resultado];
     const check = r.encolable && !upload.done
@@ -763,7 +786,7 @@ function renderUpload() {
       <td><span class="file-name">${esc(r.serie_numero || r.nombre)}</span><span class="file-sub">${esc(r.serie_numero ? `${tipoLabel(r.tipo)}, ${r.nombre}` : "")}</span></td>
       <td class="tnum">${emision}</td>
       <td class="num">${r.importe_total ? fmtMoney(r.importe_total, r.moneda) : "—"}</td>
-      <td>${enviado ? pill("En la bandeja", "info") : pill(meta.label, meta.tone)}</td>
+      <td>${enviado ? pill(r.mensajes[0]?.startsWith("Separado") ? "Separado" : "En la bandeja", r.mensajes[0]?.startsWith("Separado") ? "warn" : "info") : pill(meta.label, meta.tone)}</td>
       <td><ul class="msgs">${(r.mensajes || []).map((m) => `<li>${esc(m)}</li>`).join("") || "<li>Sin observaciones</li>"}</ul></td>
     </tr>`;
   }).join("");
@@ -773,8 +796,8 @@ function renderUpload() {
   $("upload-more").hidden = upload.done;
   $("upload-who-field").hidden = upload.done;
   $("upload-sub").textContent = upload.done
-    ? "Carga terminada. La constancia queda guardada y se puede descargar cuando se necesite."
-    : "Revisa el resultado. Desmarca los que no quieras enviar todavía; puedes soltar más archivos aquí.";
+    ? "Carga terminada. La constancia queda guardada; sigue en la bandeja para decidir qué enviar."
+    : "Revisa el resultado. Desmarca los que no quieras pasar todavía; puedes soltar más archivos aquí.";
   renderReceipt();
   syncUploadButton();
 }
@@ -800,18 +823,23 @@ function selectedUploads() {
 }
 function syncUploadButton() {
   const btn = $("upload-send");
-  if (upload.done) { btn.disabled = false; btn.textContent = "Cerrar"; return; }
+  const wrap = $("upload-separar-wrap");
+  if (upload.done) { btn.disabled = false; btn.textContent = "Ir a la bandeja"; wrap.hidden = true; return; }
   const total = document.querySelectorAll("[data-upload]").length;
-  const n = selectedUploads().length;
+  const chosen = selectedUploads();
+  const n = chosen.length;
+  const esp = chosen.filter((r) => r.especiales && r.especiales.length).length;
+  wrap.hidden = esp === 0;
+  $("upload-separar-text").textContent = `Separar ${esp === 1 ? "el que tiene" : `los ${esp} que tienen`} inafecto, exonerado, gratuito o exportación: no se envían hasta que lo indiques`;
   const all = $("upload-all");
   all.checked = n > 0 && n === total;
   all.indeterminate = n > 0 && n < total;
   btn.disabled = n === 0 || upload.busy;
-  btn.textContent = n ? `Enviar ${n} a la bandeja` : "Nada para enviar";
+  btn.textContent = n ? `Pasar ${n.toLocaleString("es-PE")} a la bandeja` : "Nada para pasar";
 }
 
 async function sendUploads(btn) {
-  if (upload.done) { closeUpload(); return; }
+  if (upload.done) { closeUpload(); showView("tray"); return; }
   const who = $("upload-who").value.trim().replace(/\s+/g, " ");
   if (!who) { whoInvalid(true); $("upload-who").focus(); return; }
   rememberWho(who);
@@ -821,15 +849,16 @@ async function sendUploads(btn) {
   busy(btn, true);
   upload.busy = true;
   try {
-    const { archivos, cargas } = await postChunks("encolar", files, { responsable: who });
+    const { archivos, cargas } = await postChunks("encolar", files, { responsable: who, separar_especiales: $("upload-separar").checked });
     const ok = archivos.filter((r) => r.encolable).length;
     const byName = new Map(archivos.map((r) => [r.nombre, r]));
     upload.results = upload.results.map((r) => byName.get(r.nombre) || r);
     Object.assign(upload, { done: true, sent: chosen, cargas });
     renderUpload();
-    toast(ok === files.length ? `${plural(ok, "archivo dejado", "archivos dejados")} en la bandeja; constancia guardada`
-      : `${ok} de ${files.length} dejados en la bandeja; revisa el detalle`, ok === files.length ? "ok" : "warn");
-    loadSummary(); loadRows({ silent: true });
+    toast(ok === files.length ? `${plural(ok, "archivo quedó", "archivos quedaron")} en la bandeja; constancia guardada`
+      : `${ok} de ${files.length} quedaron en la bandeja; revisa el detalle`, ok === files.length ? "ok" : "warn");
+    loadSummary();
+    if (currentView() === "tray") loadTray({ silent: true });
   } catch (err) {
     toast(err.message, "bad");
   } finally { upload.busy = false; busy(btn, false); syncUploadButton(); }
@@ -888,12 +917,502 @@ function bindGlobalDrop() {
     e.preventDefault();             // sin esto el navegador abriría el TXT y se saldría del panel
     depth = 0;
     show(false);
-    if (upload.busy || !$("modal").hidden) return;
+    if (upload.busy || !$("modal").hidden || !$("date-modal").hidden) return;
     const append = reviewing();
     const pending = droppedFiles(e.dataTransfer);
     if ($("upload").hidden) openUpload();
     pending.then((files) => handleFiles(files, { append }))
       .catch(() => toast("No se pudieron leer los archivos soltados", "bad"));
+  });
+}
+
+// --- vistas -----------------------------------------------------------------
+const VIEW_KEY = "puente.vista";
+function currentView() { return $("view-tray").hidden ? "docs" : "tray"; }
+function showView(view) {
+  const isTray = view === "tray";
+  $("view-tray").hidden = !isTray;
+  $("view-docs").hidden = isTray;
+  $("tab-tray").setAttribute("aria-selected", String(isTray));
+  $("tab-docs").setAttribute("aria-selected", String(!isTray));
+  const page = isTray ? $("view-tray") : $("view-docs");
+  page.classList.add("is-entering");
+  setTimeout(() => page.classList.remove("is-entering"), 400);
+  try { localStorage.setItem(VIEW_KEY, view); } catch { /* sin almacenamiento */ }
+  if (isTray) { $("tray-who").value = $("tray-who").value || storedWho(); loadTray(); }
+  else loadRows({ silent: true });
+}
+
+// --- bandeja de preparación -------------------------------------------------
+// Lo subido espera aquí: se separan especiales, se corrige la fecha de lo vencido
+// y se libera por tipo. Las notas esperan solas a que su comprobante esté aprobado.
+const TRAY_PAGE = 50;
+const tray = {
+  rows: [], fechas: {}, plazos: {}, hoy: "", rechazados: 0, loaded: false,
+  chip: "todos", tipo: "", q: "", page: 1, selected: new Set(),
+};
+const CHIPS = [
+  { key: "todos", label: "Todos" },
+  { key: "listo", label: "Listos" },
+  { key: "fuera_plazo", label: "Fuera de plazo" },
+  { key: "separado", label: "Separados" },
+  { key: "esperando", label: "Notas esperando" },
+];
+const ESPECIAL = { inafecto: "Inafecto", exonerado: "Exonerado", gratuito: "Gratuito", exportacion: "Exportación" };
+const REF_ESTADO = {
+  APROBADO: "aprobado", EN_BANDEJA: "en la bandeja", EN_COLA: "en cola de envío", DESCONOCIDA: "no pasó por el puente",
+  ENVIADO: "en Sovos", EN_PROCESO: "en Sovos", RECHAZADO: "rechazado", VALIDACION_ERROR: "con error",
+  ERROR_CONEXION: "con error de envío", RECIBIDO: "procesándose", DUPLICADO: "duplicado",
+};
+const STEP_DEFS = [
+  { key: "03", name: "Boletas", one: "boleta", many: "boletas", match: (r) => r.tipo === "03" },
+  { key: "01", name: "Facturas", one: "factura", many: "facturas", match: (r) => r.tipo === "01" },
+  { key: "nota", name: "Notas", one: "nota", many: "notas", match: (r) => isNota(r) },
+];
+const WEEKDAYS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+
+function isNota(r) { return r.tipo === "07" || r.tipo === "08"; }
+function addDays(iso, n) {
+  const d = new Date(`${iso}T12:00:00`);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function dayLabel(iso) {
+  const d = new Date(`${iso}T12:00:00`);
+  const rel = iso === tray.hoy ? "Hoy, " : iso === addDays(tray.hoy, -1) ? "Ayer, " : "";
+  return `${rel}${WEEKDAYS[d.getDay()]} ${fmtDate(iso)}`;
+}
+function fmtCount(n, one, many) { return `${n.toLocaleString("es-PE")} ${n === 1 ? one : many}`; }
+
+function trayWho() {
+  const v = $("tray-who").value.trim().replace(/\s+/g, " ");
+  $("tray-who-field").classList.toggle("is-invalid", !v);
+  if (!v) { $("tray-who").focus(); toast("Escribe quién opera: queda en el historial de cada comprobante", "warn"); return null; }
+  rememberWho(v);
+  return v;
+}
+
+async function loadTray({ silent = false } = {}) {
+  if (!tray.loaded && !silent) traySkeleton();
+  try {
+    const d = await api("/api/bandeja");
+    Object.assign(tray, { rows: d.filas, fechas: d.fechas, plazos: d.plazos, hoy: d.hoy,
+                          rechazados: d.rechazados_por_fecha, loaded: true });
+    const present = new Set(tray.rows.map((r) => r.clave));
+    tray.selected = new Set([...tray.selected].filter((c) => present.has(c)));
+    renderTray();
+  } catch (err) {
+    if (!silent) trayError(err.message);
+  }
+}
+
+function traySkeleton() {
+  $("tray-state").hidden = true;
+  $("tray-rows").innerHTML = Array.from({ length: 6 }, () => `
+    <tr aria-hidden="true"><td></td><td><span class="sk sk-w1"></span></td><td><span class="sk sk-w2"></span></td>
+    <td><span class="sk sk-w2"></span></td><td class="num"><span class="sk sk-w4"></span></td><td><span class="sk sk-w3"></span></td></tr>`).join("");
+}
+function trayError(msg) {
+  $("tray-rows").innerHTML = "";
+  const st = $("tray-state");
+  st.hidden = false;
+  st.innerHTML = `
+    <svg class="state-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>
+    <h3>No se pudo cargar la bandeja</h3><p>${esc(msg)}. Verifica que el puente esté corriendo.</p>
+    <button class="btn btn-secondary" type="button" data-tray-action="reload">Volver a cargar</button>`;
+}
+
+function trayFiltered() {
+  const q = tray.q.toUpperCase();
+  return tray.rows.filter((r) => (tray.chip === "todos" || r.grupo === tray.chip)
+    && (!tray.tipo || (tray.tipo === "nota" ? isNota(r) : r.tipo === tray.tipo))
+    && (!q || r.serie_numero.includes(q)));
+}
+
+function renderTray() {
+  renderTrayAlerts();
+  renderTraySteps();
+  renderTrayChips();
+  renderTrayTable();
+}
+
+function renderTrayAlerts() {
+  const R = tray.rows;
+  const by = (g) => R.filter((r) => r.grupo === g);
+  const fuera = by("fuera_plazo"), sep = by("separado"), esp = by("esperando");
+  const hoy = R.filter((r) => r.grupo === "listo" && r.dias_restantes === 0);
+  const sinRef = R.filter((r) => r.grupo === "listo" && r.referencia && r.referencia.estado === "DESCONOCIDA");
+  const cards = [];
+  if (fuera.length) {
+    const fac = fuera.filter((r) => r.familia === "factura").length;
+    const partes = [fac && fmtCount(fac, "factura o nota de factura", "facturas o notas de factura"),
+                    fuera.length - fac && fmtCount(fuera.length - fac, "boleta o nota de boleta", "boletas o notas de boleta")].filter(Boolean);
+    const f = fuera.map((r) => r.fecha_efectiva).sort();
+    cards.push({ tone: "bad", n: fuera.length, title: "Fuera de plazo",
+      text: `${partes.join(" y ")}, emitidas del ${fmtDate(f[0])} al ${fmtDate(f[f.length - 1])}. Con su fecha original SUNAT las rechazaría. ¿Les colocamos una fecha nueva?`,
+      actions: [["Asignar fecha nueva", "date-fuera", true], ["Ver cuáles", "chip:fuera_plazo"]] });
+  }
+  if (hoy.length) {
+    cards.push({ tone: "warn", n: hoy.length, title: "Vencen hoy",
+      text: "Si no salen hoy quedarán fuera de plazo. Conviene enviarlos antes que el resto.",
+      actions: [["Enviar ahora", "send-hoy", true]] });
+  }
+  if (sep.length) {
+    const kinds = {};
+    sep.forEach((r) => r.especiales.forEach((e) => { kinds[e] = (kinds[e] || 0) + 1; }));
+    const detalle = Object.entries(kinds).map(([k, n]) => `${n} con ${ESPECIAL[k].toLowerCase()}`).join(", ");
+    cards.push({ tone: "warn", n: sep.length, title: "Separados",
+      text: `${detalle || "Separados a mano"}. No se envían hasta que tú lo indiques.`,
+      actions: [["Ver cuáles", "chip:separado"]] });
+  }
+  if (sinRef.length) {
+    cards.push({ tone: "warn", n: sinRef.length, title: "Notas sin su comprobante aquí",
+      text: "Modifican comprobantes que no se subieron al puente. Si se emitieron con el sistema anterior se pueden enviar; si no, sube primero el comprobante.",
+      actions: [["Ver cuáles", "sinref"]] });
+  }
+  if (esp.length) {
+    cards.push({ tone: "info", n: esp.length, title: "Notas esperando a su comprobante",
+      text: "Salen solas en cuanto SUNAT apruebe el comprobante que modifican.",
+      actions: [["Ver cuáles", "chip:esperando"]] });
+  }
+  if (tray.rechazados) {
+    cards.push({ tone: "bad", n: tray.rechazados, title: "Rechazados por fecha",
+      text: "SUNAT los rechazó por presentarse fuera de plazo (2108). Tráelos a la bandeja para darles una fecha nueva.",
+      actions: [["Traer a la bandeja", "bring-back", true]] });
+  }
+  if (!cards.length && R.length) {
+    cards.push({ tone: "ok", n: R.length, title: "Todo en orden",
+      text: "Nada fuera de plazo ni separado. Puedes enviar por tipo.", actions: [] });
+  }
+  $("tray-alerts").innerHTML = cards.map((c) => `
+    <article class="tray-alert" data-tone="${c.tone}">
+      <span class="tray-alert-num">${c.n.toLocaleString("es-PE")}</span>
+      <span class="tray-alert-title">${esc(c.title)}</span>
+      <p>${esc(c.text)}</p>
+      ${c.actions.length ? `<div class="tray-alert-actions">${c.actions.map(([label, act, primary]) =>
+        `<button class="btn ${primary ? "btn-primary" : "btn-secondary"} btn-sm" type="button" data-tray-action="${act}">${esc(label)}</button>`).join("")}</div>` : ""}
+    </article>`).join("");
+  $("tray-alerts").querySelectorAll(".tray-alert").forEach((el, i) => el.style.setProperty("--i", i));
+}
+
+function renderTraySteps() {
+  $("tray-steps").innerHTML = STEP_DEFS.map((s) => {
+    const all = tray.rows.filter(s.match);
+    const listos = all.filter((r) => r.grupo === "listo");
+    const otros = all.length - listos.length;
+    const sub = all.length
+      ? `${fmtCount(listos.length, "lista", "listas")}${otros ? `, ${otros.toLocaleString("es-PE")} por revisar` : ""}`
+      : "Ninguna en la bandeja";
+    return `<li class="tray-step" data-empty="${listos.length === 0}">
+      <span class="tray-step-name">${s.name}</span>
+      <span class="tray-step-sub">${sub}</span>
+      <button class="btn ${listos.length ? "btn-primary" : "btn-secondary"} btn-sm" type="button" data-tray-action="send-${s.key}" ${listos.length ? "" : "disabled"}>
+        ${listos.length ? `Enviar ${fmtCount(listos.length, s.one, s.many)}` : "Nada para enviar"}</button>
+    </li>`;
+  }).join("");
+}
+
+function renderTrayChips() {
+  const counts = { todos: tray.rows.length };
+  tray.rows.forEach((r) => { counts[r.grupo] = (counts[r.grupo] || 0) + 1; });
+  $("tray-chips").innerHTML = CHIPS.filter((c) => c.key === "todos" || counts[c.key] || tray.chip === c.key).map((c) =>
+    `<button class="chip" type="button" role="tab" data-chip="${c.key}" aria-selected="${tray.chip === c.key}">
+      ${c.label} <span class="chip-n">${(counts[c.key] || 0).toLocaleString("es-PE")}</span></button>`).join("");
+}
+
+function plazoHtml(r) {
+  const hasta = r.vence ? `hasta el ${fmtDate(r.vence)}` : "";
+  if (r.dias_restantes < 0) return `<span class="plazo" data-tone="bad">Venció hace ${fmtCount(-r.dias_restantes, "día", "días")}<span class="plazo-sub">SUNAT lo aceptaba ${hasta}</span></span>`;
+  if (r.dias_restantes === 0) return `<span class="plazo" data-tone="warn">Vence hoy<span class="plazo-sub">${r.plazo_dias} días de plazo</span></span>`;
+  if (r.dias_restantes === 1) return `<span class="plazo" data-tone="warn">Vence mañana<span class="plazo-sub">${hasta}</span></span>`;
+  return `<span class="plazo">Quedan ${r.dias_restantes} días<span class="plazo-sub">${hasta}</span></span>`;
+}
+
+function situacionHtml(r) {
+  const head = {
+    listo: pill("Listo para enviar", "ok"), fuera_plazo: pill("Fuera de plazo", "bad"),
+    separado: pill("Separado", "warn"), esperando: pill("Esperando su comprobante", "info"),
+  }[r.grupo];
+  const tags = r.especiales.length ? `<span class="tags">${r.especiales.map((e) => `<span class="tag">${ESPECIAL[e]}</span>`).join("")}</span>` : "";
+  const ref = r.referencia ? `<small>Modifica ${esc(r.referencia.serie_numero)}, ${esc(REF_ESTADO[r.referencia.estado] || r.referencia.estado)}</small>` : "";
+  const msg = r.mensaje && !r.mensaje.startsWith("Separado por") ? `<small>${esc(r.mensaje)}</small>` : "";
+  return `<div class="situacion">${head}${tags}${ref}${msg}</div>`;
+}
+
+function renderTrayTable() {
+  const rows = trayFiltered();
+  const pages = Math.max(1, Math.ceil(rows.length / TRAY_PAGE));
+  tray.page = Math.min(tray.page, pages);
+  const start = (tray.page - 1) * TRAY_PAGE;
+  const page = rows.slice(start, start + TRAY_PAGE);
+  const st = $("tray-state");
+  if (!rows.length) {
+    $("tray-rows").innerHTML = "";
+    st.hidden = false;
+    st.innerHTML = tray.rows.length
+      ? `<svg class="state-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/></svg>
+         <h3>Nada coincide con este filtro</h3><p>Prueba con otro filtro o búsqueda.</p>
+         <button class="btn btn-secondary" type="button" data-tray-action="clear">Ver todos</button>`
+      : `<svg class="state-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h4l2 3h4l2-3h4M5 13 7 5h10l2 8v6H5z"/></svg>
+         <h3>La bandeja está vacía</h3>
+         <p>Sube los TXT pendientes, o suelta la carpeta completa en cualquier parte. Se revisan y esperan aquí hasta que decidas enviarlos.</p>
+         <button class="btn btn-primary" type="button" data-tray-action="upload">Subir TXT</button>`;
+  } else {
+    st.hidden = true;
+    $("tray-rows").innerHTML = page.map((r) => {
+      const sel = tray.selected.has(r.clave);
+      const emision = r.fecha_nueva
+        ? `<span class="date-old">${fmtDate(r.fecha_emision)}</span>${fmtDate(r.fecha_nueva)}<span class="plazo-sub">fecha nueva</span>`
+        : fmtDate(r.fecha_emision);
+      return `<tr class="${sel ? "is-selected" : ""}">
+        <td class="c-check"><input class="row-check" type="checkbox" data-tray="${esc(r.clave)}" ${sel ? "checked" : ""} aria-label="Seleccionar ${esc(r.serie_numero)}"></td>
+        <td class="c-doc"><span class="doc-id">${esc(r.serie_numero)}</span><span class="doc-type">${esc(tipoLabel(r.tipo))}</span></td>
+        <td class="tnum" data-label="Emisión">${emision}</td>
+        <td data-label="Plazo">${plazoHtml(r)}</td>
+        <td class="num" data-label="Total">${fmtMoney(r.importe_total, r.moneda)}</td>
+        <td class="c-reply">${situacionHtml(r)}</td>
+      </tr>`;
+    }).join("");
+  }
+  $("tray-range").textContent = rows.length
+    ? `${(start + 1).toLocaleString("es-PE")}–${(start + page.length).toLocaleString("es-PE")} de ${rows.length.toLocaleString("es-PE")}` : "Sin resultados";
+  $("tray-prev").disabled = tray.page <= 1;
+  $("tray-next").disabled = tray.page >= pages;
+  syncTraySelection();
+}
+
+function syncTraySelection() {
+  const n = tray.selected.size;
+  $("tray-bulk").hidden = n === 0;
+  if (n) {
+    const sel = tray.rows.filter((r) => tray.selected.has(r.clave));
+    const f = sel.map((r) => r.fecha_efectiva).sort();
+    $("tray-bulk-count").textContent = `${fmtCount(n, "seleccionado", "seleccionados")}`
+      + (f.length ? `, emitidos del ${fmtDate(f[0])} al ${fmtDate(f[f.length - 1])}` : "");
+  }
+  const visible = trayFiltered();
+  const marked = visible.filter((r) => tray.selected.has(r.clave)).length;
+  const all = $("tray-all");
+  all.checked = visible.length > 0 && marked === visible.length;
+  all.indeterminate = marked > 0 && marked < visible.length;
+}
+
+// --- acciones de la bandeja --------------------------------------------------
+async function trayPost(action, body) {
+  const who = trayWho();
+  if (!who) return null;
+  return api(`/api/bandeja/${action}`, { method: "POST", body: { ...body, responsable: who } });
+}
+
+function omitidosResumen(omitidos) {
+  const tipos = [["Fuera de plazo", "fuera de plazo"], ["Separado", "separados"], ["no pasó por el puente", "sin su comprobante en el puente"],
+                 ["Ya no está", "ya no estaban en la bandeja"], ["no está dentro del plazo", "con fecha fuera del plazo"],
+                 ["anterior a la original", "con fecha anterior a la original"]];
+  const out = {};
+  omitidos.forEach((o) => {
+    const t = tipos.find(([k]) => o.motivo.includes(k));
+    const key = t ? t[1] : o.motivo;
+    out[key] = (out[key] || 0) + 1;
+  });
+  return Object.entries(out).map(([k, n]) => `${n} ${k}`).join(", ");
+}
+
+async function afterTrayAction(r, okMsg) {
+  if (!r) return;
+  const omit = r.omitidos.length ? `. Sin cambios: ${omitidosResumen(r.omitidos)}` : "";
+  toast(`${okMsg(r.hechos)}${omit}`, r.omitidos.length ? "warn" : "ok");
+  tray.selected.clear();
+  await Promise.all([loadTray({ silent: true }), loadSummary()]);
+}
+
+async function releaseRows(rows, { title, btn } = {}) {
+  if (!rows.length) return;
+  if (!trayWho()) return;
+  const sep = rows.filter((r) => r.grupo === "separado");
+  const fuera = rows.filter((r) => r.grupo === "fuera_plazo");
+  const sinRef = rows.filter((r) => r.grupo === "listo" && r.referencia && r.referencia.estado === "DESCONOCIDA");
+  const esperan = rows.filter((r) => r.referencia && !["APROBADO", "DESCONOCIDA"].includes(r.referencia.estado)).length;
+  const s = state.summary;
+  const notas = [
+    `<p>Pasan a la cola de envío de la más antigua a la más reciente y el servicio los envía a Sovos${s ? ` (${esc(s.ambiente)})` : ""}.</p>`,
+    esperan ? `<p>${fmtCount(esperan, "nota esperará", "notas esperarán")} a que su comprobante esté aprobado y saldrán solas.</p>` : "",
+    fuera.length ? `<p>${fmtCount(fuera.length, "está fuera de plazo y no se incluye", "están fuera de plazo y no se incluyen")}: primero asígnales una fecha nueva.</p>` : "",
+  ].join("");
+  const check = sep.length
+    ? { text: `Enviar también ${fmtCount(sep.length, "separado", "separados")} (inafecto, exonerado u otros)` }
+    : sinRef.length ? { text: `Incluir ${fmtCount(sinRef.length, "nota", "notas")} cuyo comprobante no pasó por el puente (emitido con el sistema anterior)` } : null;
+  const answer = await confirmModal({
+    title: title || `¿Enviar ${fmtCount(rows.length - fuera.length, "comprobante", "comprobantes")}?`,
+    html: notas, ok: "Enviar", check,
+  });
+  if (!answer) return;
+  let incluirSinRef = !sep.length && answer.checked;
+  const incluirSep = sep.length > 0 && answer.checked;
+  if (sep.length && sinRef.length) {
+    const second = await confirmModal({
+      title: "Notas sin su comprobante en el puente",
+      html: `<p>${fmtCount(sinRef.length, "nota modifica", "notas modifican")} comprobantes que no se subieron aquí. Si se emitieron con el sistema anterior, SUNAT los tiene y la nota pasará; si no, la rechazará.</p>`,
+      ok: "Incluirlas", check: null,
+    });
+    incluirSinRef = !!second;
+  }
+  busy(btn, true);
+  try {
+    const r = await trayPost("liberar", { claves: rows.map((x) => x.clave), incluir_separados: incluirSep, incluir_sin_referencia: incluirSinRef });
+    await afterTrayAction(r, (h) => `${fmtCount(h.length, "comprobante liberado", "comprobantes liberados")}`);
+  } catch (err) { toast(err.message, "bad"); }
+  finally { busy(btn, false); }
+}
+
+function openDateModal(rows) {
+  rows = rows.filter((r) => r.grupo !== "esperando");
+  if (!rows.length) { toast("Elige comprobantes que estén en la bandeja", "warn"); return; }
+  if (!trayWho()) return;
+  const hasFac = rows.some((r) => r.familia === "factura");
+  const mixed = hasFac && rows.some((r) => r.familia === "boleta");
+  const fechas = tray.fechas[hasFac ? "factura" : "boleta"] || [];
+  const plazo = tray.plazos[hasFac ? "factura" : "boleta"];
+  const conNueva = rows.some((r) => r.fecha_nueva);
+  $("date-text").textContent = `${fmtCount(rows.length, "comprobante", "comprobantes")}. Solo se muestran las fechas que SUNAT acepta hoy`
+    + `${mixed ? " para boletas y facturas a la vez" : ""}. La fecha original queda en el historial y el TXT original no se modifica.`;
+  $("date-options").innerHTML = `<legend class="sr-only">Fechas que SUNAT acepta hoy</legend>` + fechas.map((f, i) => `
+    <label class="date-opt"><input type="radio" name="fecha" value="${f}" ${i === 0 ? "checked" : ""}>
+      <strong>${dayLabel(f)}${i === 0 ? ", recomendada" : ""}</strong>
+      <span>${i === fechas.length - 1 ? "Último día posible: debe salir hoy mismo" : `SUNAT la acepta hasta el ${fmtDate(addDays(f, plazo))}`}</span></label>`).join("")
+    + (conNueva ? `<label class="date-opt"><input type="radio" name="fecha" value="">
+      <strong>Volver a la fecha original</strong><span>Quita la fecha nueva asignada</span></label>` : "");
+  const warn = () => {
+    const f = document.querySelector("#date-options input:checked")?.value ?? null;
+    $("date-ok").disabled = f === null;
+    const msgs = [];
+    if (f) {
+      const mes = rows.filter((r) => r.fecha_emision.slice(0, 7) !== f.slice(0, 7)).length;
+      if (mes) msgs.push(`${fmtCount(mes, "comprobante cambia", "comprobantes cambian")} de mes, y con eso de periodo tributario. Confírmalo con contabilidad.`);
+      const despues = rows.filter((r) => r.fecha_emision > f).length;
+      if (despues) msgs.push(`${fmtCount(despues, "es posterior", "son posteriores")} a esta fecha y no se moverá${despues === 1 ? "" : "n"}.`);
+    }
+    $("date-warn").hidden = !msgs.length;
+    $("date-warn").textContent = msgs.join(" ");
+  };
+  $("date-options").onchange = warn;
+  warn();
+  const layer = $("date-modal");
+  layer.hidden = false;
+  requestAnimationFrame(() => layer.classList.add("is-open"));
+  $("date-options").querySelector("input")?.focus();
+  const close = () => { layer.classList.remove("is-open"); setTimeout(() => { layer.hidden = true; }, 160); };
+  $("date-cancel").onclick = close;
+  layer.onclick = (e) => { if (e.target === layer) close(); };
+  layer.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+  $("date-ok").onclick = async () => {
+    const fecha = document.querySelector("#date-options input:checked")?.value ?? "";
+    busy($("date-ok"), true);
+    try {
+      const r = await trayPost("fecha", { claves: rows.map((x) => x.clave), fecha });
+      if (!r) return;
+      close();
+      const hechos = new Set(r.hechos);
+      await afterTrayAction(r, (h) => fecha
+        ? `Fecha ${fmtDate(fecha)} asignada a ${fmtCount(h.length, "comprobante", "comprobantes")}`
+        : `${fmtCount(h.length, "comprobante volvió", "comprobantes volvieron")} a su fecha original`);
+      const listos = tray.rows.filter((x) => hechos.has(x.clave) && x.grupo === "listo");
+      if (fecha && listos.length) await releaseRows(listos, { title: `¿Enviar ahora ${fmtCount(listos.length, "el comprobante", "los comprobantes")} con fecha nueva?` });
+    } catch (err) { toast(err.message, "bad"); }
+    finally { busy($("date-ok"), false); }
+  };
+}
+
+async function trayAction(act, btn) {
+  const R = tray.rows;
+  if (act === "reload") return loadTray();
+  if (act === "upload") return openUpload();
+  if (act === "clear") { Object.assign(tray, { chip: "todos", tipo: "", q: "", page: 1 }); $("tray-tipo").value = ""; $("tray-q").value = ""; return renderTray(); }
+  if (act.startsWith("chip:")) { tray.chip = act.slice(5); tray.tipo = ""; $("tray-tipo").value = ""; tray.page = 1; return renderTray(); }
+  if (act === "sinref") { tray.chip = "listo"; tray.tipo = "nota"; $("tray-tipo").value = "nota"; tray.page = 1; return renderTray(); }
+  if (act === "date-fuera") return openDateModal(R.filter((r) => r.grupo === "fuera_plazo"));
+  if (act === "send-hoy") return releaseRows(R.filter((r) => r.grupo === "listo" && r.dias_restantes === 0), { title: "¿Enviar los que vencen hoy?", btn });
+  if (act.startsWith("send-")) {
+    const def = STEP_DEFS.find((s) => `send-${s.key}` === act);
+    const rows = R.filter((r) => def.match(r) && r.grupo === "listo");
+    return releaseRows(rows, { title: `¿Enviar ${fmtCount(rows.length, def.one, def.many)} a Sovos?`, btn });
+  }
+  if (act === "bring-back") {
+    busy(btn, true);
+    try {
+      const r = await trayPost("traer-rechazados", {});
+      await afterTrayAction(r, (h) => `${fmtCount(h.length, "rechazado volvió", "rechazados volvieron")} a la bandeja: asígnales una fecha nueva`);
+    } catch (err) { toast(err.message, "bad"); }
+    finally { busy(btn, false); }
+  }
+}
+
+async function bulkAction(act, btn) {
+  const rows = tray.rows.filter((r) => tray.selected.has(r.clave));
+  if (act === "limpiar") { tray.selected.clear(); return renderTrayTable(); }
+  if (!rows.length) return;
+  if (act === "liberar") return releaseRows(rows, { btn });
+  if (act === "fecha") return openDateModal(rows);
+  if (act === "descartar") {
+    if (!trayWho()) return;
+    const ok = await confirmModal({
+      title: `¿Descartar ${fmtCount(rows.length, "comprobante", "comprobantes")} de la bandeja?`,
+      html: "<p>No se envían. El TXT se guarda en la carpeta de descartados y puedes volver a subirlo cuando quieras.</p>",
+      ok: "Descartar", danger: true,
+    });
+    if (!ok) return;
+  }
+  busy(btn, true);
+  try {
+    const claves = rows.map((r) => r.clave);
+    const r = act === "descartar" ? await trayPost("descartar", { claves })
+      : await trayPost("separar", { claves, separar: act === "separar" });
+    await afterTrayAction(r, (h) => ({
+      descartar: `${fmtCount(h.length, "descartado", "descartados")} de la bandeja`,
+      separar: `${fmtCount(h.length, "separado", "separados")}: no se envían hasta que lo indiques`,
+      quitar: `${fmtCount(h.length, "volvió", "volvieron")} a la bandeja normal`,
+    })[act]);
+  } catch (err) { toast(err.message, "bad"); }
+  finally { busy(btn, false); }
+}
+
+function bindTray() {
+  document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
+  $("tray-who").addEventListener("input", () => $("tray-who-field").classList.remove("is-invalid"));
+  $("tray-q").addEventListener("input", debounce((e) => { tray.q = e.target.value.trim(); tray.page = 1; renderTrayTable(); }, 200));
+  $("tray-tipo").addEventListener("change", (e) => { tray.tipo = e.target.value; tray.page = 1; renderTrayTable(); });
+  $("tray-chips").addEventListener("click", (e) => {
+    const c = e.target.closest("[data-chip]");
+    if (!c) return;
+    tray.chip = c.dataset.chip; tray.page = 1;
+    renderTrayChips(); renderTrayTable();
+  });
+  $("tray-prev").addEventListener("click", () => { tray.page -= 1; renderTrayTable(); });
+  $("tray-next").addEventListener("click", () => { tray.page += 1; renderTrayTable(); });
+  $("tray-rows").addEventListener("change", (e) => {
+    const c = e.target.closest("[data-tray]");
+    if (!c) return;
+    if (c.checked) tray.selected.add(c.dataset.tray); else tray.selected.delete(c.dataset.tray);
+    c.closest("tr").classList.toggle("is-selected", c.checked);
+    syncTraySelection();
+  });
+  $("tray-all").addEventListener("change", (e) => {
+    trayFiltered().forEach((r) => { if (e.target.checked) tray.selected.add(r.clave); else tray.selected.delete(r.clave); });
+    renderTrayTable();
+  });
+  $("tray-first-btn").addEventListener("click", () => {
+    const n = parseInt($("tray-first").value, 10);
+    if (!(n > 0)) { toast("Escribe cuántos quieres seleccionar", "warn"); $("tray-first").focus(); return; }
+    const pick = trayFiltered().slice(0, n);
+    tray.selected = new Set(pick.map((r) => r.clave));
+    renderTrayTable();
+    if (pick.length < n) toast(`Solo hay ${pick.length.toLocaleString("es-PE")} en este filtro`, "warn");
+  });
+  $("tray-first").addEventListener("keydown", (e) => { if (e.key === "Enter") $("tray-first-btn").click(); });
+  $("view-tray").addEventListener("click", (e) => {
+    const a = e.target.closest("[data-tray-action]");
+    if (a) { trayAction(a.dataset.trayAction, a); return; }
+    const b = e.target.closest("[data-bulk]");
+    if (b) bulkAction(b.dataset.bulk, b);
   });
 }
 
@@ -957,8 +1476,9 @@ function clearFilters() {
 // --- arranque ---------------------------------------------------------------
 function refreshLoop() {
   setInterval(() => {
-    if (document.hidden || !$("modal").hidden || !$("upload").hidden) return;
+    if (document.hidden || !$("modal").hidden || !$("upload").hidden || !$("date-modal").hidden) return;
     loadSummary();
+    if (currentView() === "tray") { loadTray({ silent: true }); return; }
     loadRows({ silent: true });
     if (state.openClave) showDetail(state.openClave);
   }, REFRESH_MS);
@@ -967,7 +1487,12 @@ function refreshLoop() {
 
 bind();
 bindUpload();
+bindTray();
 syncSortHeaders();
 loadSummary();
-loadRows();
+(() => {
+  let view = "docs";
+  try { view = localStorage.getItem(VIEW_KEY) || "docs"; } catch { /* sin almacenamiento */ }
+  if (view === "tray") showView("tray"); else loadRows();
+})();
 refreshLoop();

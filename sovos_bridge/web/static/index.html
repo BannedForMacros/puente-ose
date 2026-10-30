@@ -35,7 +35,101 @@
     </div>
   </header>
 
-  <main class="page">
+  <nav class="tabs" aria-label="Secciones">
+    <button class="tab" type="button" data-view="tray" id="tab-tray" aria-selected="false">
+      Bandeja <span class="tab-count" id="tab-tray-count" hidden></span>
+    </button>
+    <button class="tab" type="button" data-view="docs" id="tab-docs" aria-selected="true">Comprobantes</button>
+  </nav>
+
+  <main class="page" id="view-tray" hidden>
+    <header class="tray-head">
+      <div>
+        <h2>Bandeja de preparación</h2>
+        <p class="tray-sub">Lo que subes espera aquí. Nada sale a Sovos hasta que lo liberes.</p>
+      </div>
+      <label class="field tray-who" id="tray-who-field">
+        <span class="field-label">Quién opera (queda en el historial)</span>
+        <input type="text" id="tray-who" maxlength="80" autocomplete="name" placeholder="Nombre y apellido">
+      </label>
+    </header>
+
+    <section class="tray-alerts" id="tray-alerts" aria-label="Avisos" aria-live="polite"></section>
+
+    <section class="tray-send" id="tray-send" aria-labelledby="tray-send-title">
+      <div class="tray-send-text">
+        <h3 id="tray-send-title">Enviar por tipo</h3>
+        <p>Orden recomendado. Cada grupo sale de la fecha más antigua a la más reciente.</p>
+      </div>
+      <ol class="tray-steps" id="tray-steps"></ol>
+    </section>
+
+    <section class="panel" aria-label="Comprobantes en la bandeja">
+      <div class="toolbar">
+        <div class="chips" id="tray-chips" role="tablist" aria-label="Filtrar por situación"></div>
+        <label class="field">
+          <span class="field-label">Tipo</span>
+          <select id="tray-tipo">
+            <option value="">Todos</option>
+            <option value="03">Boleta</option>
+            <option value="01">Factura</option>
+            <option value="nota">Notas</option>
+          </select>
+        </label>
+        <label class="search">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="6"/><path d="m14 14 4 4"/></svg>
+          <span class="sr-only">Buscar en la bandeja</span>
+          <input id="tray-q" type="search" placeholder="Buscar serie o número" autocomplete="off">
+        </label>
+        <div class="toolbar-end pick-first">
+          <label class="field field-inline">
+            <span class="field-label">Seleccionar los primeros</span>
+            <input type="number" id="tray-first" min="1" step="1" inputmode="numeric" placeholder="Cantidad">
+          </label>
+          <button class="btn btn-secondary btn-sm" id="tray-first-btn" type="button">Seleccionar</button>
+        </div>
+      </div>
+
+      <div class="bulkbar" id="tray-bulk" hidden>
+        <span class="bulk-count" id="tray-bulk-count"></span>
+        <div class="bulk-actions">
+          <button class="btn btn-primary btn-sm" type="button" data-bulk="liberar">Enviar</button>
+          <button class="btn btn-secondary btn-sm" type="button" data-bulk="fecha">Asignar fecha</button>
+          <button class="btn btn-secondary btn-sm" type="button" data-bulk="separar">Separar</button>
+          <button class="btn btn-secondary btn-sm" type="button" data-bulk="quitar">Quitar separación</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-bulk="descartar">Descartar</button>
+          <button class="btn btn-ghost btn-sm" type="button" data-bulk="limpiar">Quitar selección</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="grid tray-grid">
+          <thead>
+            <tr>
+              <th scope="col" class="c-check"><input class="row-check" type="checkbox" id="tray-all" aria-label="Seleccionar todos los del filtro"></th>
+              <th scope="col">Comprobante</th>
+              <th scope="col">Emisión</th>
+              <th scope="col">Plazo SUNAT</th>
+              <th scope="col" class="num">Total</th>
+              <th scope="col">Situación</th>
+            </tr>
+          </thead>
+          <tbody id="tray-rows"></tbody>
+        </table>
+        <div class="state" id="tray-state" hidden></div>
+      </div>
+
+      <footer class="pager">
+        <span id="tray-range"></span>
+        <div class="pager-buttons">
+          <button class="btn btn-ghost" id="tray-prev" type="button">Anterior</button>
+          <button class="btn btn-ghost" id="tray-next" type="button">Siguiente</button>
+        </div>
+      </footer>
+    </section>
+  </main>
+
+  <main class="page" id="view-docs">
     <section class="flow" aria-label="Recorrido de los comprobantes">
       <ol class="flow-track" id="flow-track"></ol>
       <div class="flow-attention" id="flow-attention" aria-label="Requieren atención"></div>
@@ -139,7 +233,7 @@
       <header class="upload-head">
         <div>
           <h2 id="upload-title">Subir TXT</h2>
-          <p class="upload-sub" id="upload-sub">Se revisan antes de enviar: nada sale a Sovos hasta que confirmes.</p>
+          <p class="upload-sub" id="upload-sub">Se revisan y quedan en la bandeja: nada sale a Sovos hasta que los liberes.</p>
         </div>
         <button class="icon-btn" id="upload-close" type="button" aria-label="Cerrar">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
@@ -151,7 +245,7 @@
           <input type="file" id="upload-input" accept=".txt,text/plain" multiple>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
           <span class="dropzone-title">Arrastra aquí los TXT o una carpeta completa</span>
-          <span class="dropzone-hint" id="dropzone-hint">o haz clic para elegirlos. Hasta 500 por vez; también acepta nombres con prefijo.</span>
+          <span class="dropzone-hint" id="dropzone-hint">o haz clic para elegirlos. Hasta 5000 por vez; también acepta nombres con prefijo.</span>
           <span class="dropzone-progress" id="dropzone-progress" hidden></span>
         </label>
 
@@ -188,7 +282,12 @@
                  aria-describedby="upload-who-error">
           <span class="field-error" id="upload-who-error" hidden>Escribe tu nombre para registrar la carga</span>
         </label>
-        <p class="upload-note" id="upload-note"></p>
+        <div class="upload-opts">
+          <label class="check" id="upload-separar-wrap" hidden>
+            <input type="checkbox" id="upload-separar" checked><span id="upload-separar-text"></span>
+          </label>
+          <p class="upload-note" id="upload-note"></p>
+        </div>
         <div class="modal-actions">
           <label class="btn btn-ghost" id="upload-more" hidden>
             <input type="file" id="upload-more-input" accept=".txt,text/plain" multiple class="sr-only">Agregar más
@@ -205,6 +304,21 @@
       <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
       <strong>Suelta para revisar los TXT</strong>
       <span>Nada se envía a Sovos hasta que confirmes</span>
+    </div>
+  </div>
+
+  <div class="modal-layer" id="date-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="date-title" aria-describedby="date-text">
+      <h2 id="date-title">Nueva fecha de emisión</h2>
+      <p class="modal-text" id="date-text"></p>
+      <fieldset class="date-options" id="date-options">
+        <legend class="sr-only">Fechas que SUNAT acepta hoy</legend>
+      </fieldset>
+      <p class="date-warn" id="date-warn" hidden></p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="date-cancel" type="button">Cancelar</button>
+        <button class="btn btn-primary" id="date-ok" type="button" disabled>Asignar fecha</button>
+      </div>
     </div>
   </div>
 

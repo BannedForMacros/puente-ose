@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from sovos_bridge import __version__
 from sovos_bridge.config import Settings
+from sovos_bridge.service.bandeja import EN_BANDEJA, Bandeja
 from sovos_bridge.service.operations import REPORT_COLUMNS, RETRYABLE, retry_errors, retry_one
 from sovos_bridge.service.status import StatusPoller
 from sovos_bridge.sovos import SovosClient, SovosError, parse_notifications
@@ -48,6 +49,7 @@ MAX_BODY = 64_000
 MAX_UPLOAD_BODY = 30 * 1024 * 1024
 HEARTBEAT_STALE_SECONDS = 120
 FILE_KINDS = {"txt": "archivo", "xml": "xml_path", "pdf": "pdf_path", "sbd": "sbd_path"}
+_BANDEJA_ACTIONS = {"liberar", "fecha", "separar", "descartar", "traer-rechazados"}
 _CARGA_ROUTE = re.compile(r"^/api/cargas/(\d+)\.csv$")
 _DOC_ROUTE = re.compile(r"^/api/documents/([^/]+)(?:/(retry|consultar|archivo/(txt|xml|pdf|sbd)))?$")
 
@@ -103,6 +105,7 @@ class PanelApp:
             "servicio": {"activo": alive, "ultima_revision": last_beat.isoformat(timespec="seconds")
                          if last_beat else None},
             "bandeja": len(inbox),
+            "preparacion": len(self.db.staged(*EN_BANDEJA)),
             "estados": {e.value: counts.get(e.value, 0) for e in Estado},
             "hoy": {"aprobados": len(aprobados_hoy),
                     "monto": f"{sum(_num(r['importe_total']) for r in aprobados_hoy):.2f}"},
@@ -190,7 +193,8 @@ class PanelApp:
             usuario = responsable if usuario in ("", "local", responsable) else f"{responsable} (acceso {usuario})"
         try:
             if body.get("modo") == "encolar":
-                checks, carga_id = upload.enqueue(self.s, self.db, archivos, usuario=usuario, origen=origen)
+                checks, carga_id = upload.enqueue(self.s, self.db, archivos, usuario=usuario, origen=origen,
+                                                  separar_especiales=body.get("separar_especiales", True) is not False)
                 log.info("Panel: carga N.º %d de %s (%s), %d de %d archivos encolados", carga_id, usuario,
                          origen, sum(c.encolable for c in checks), len(checks))
                 carga = self._carga(self.db.upload(carga_id)[0])
@@ -200,6 +204,35 @@ class PanelApp:
             raise PanelError(HTTPStatus.BAD_REQUEST, str(exc)) from None
         return {"archivos": upload.as_dicts(checks),
                 "encolables": sum(c.encolable for c in checks), "carga": carga}
+
+    # --- bandeja de preparación ---------------------------------------------
+    def bandeja(self) -> dict[str, Any]:
+        return Bandeja(self.s, self.db).summary()
+
+    def bandeja_action(self, action: str, body: dict[str, Any], usuario: str) -> dict[str, Any]:
+        responsable = " ".join(str(body.get("responsable") or "").split())[:80]
+        if not responsable:
+            raise PanelError(HTTPStatus.BAD_REQUEST, "Indica quién hace el cambio: queda en el historial")
+        usuario = responsable if usuario in ("", "local", responsable) else f"{responsable} (acceso {usuario})"
+        claves = body.get("claves") or []
+        if not isinstance(claves, list) or not all(isinstance(c, str) for c in claves):
+            raise PanelError(HTTPStatus.BAD_REQUEST, "Lista de comprobantes inválida")
+        if action != "traer-rechazados" and not claves:
+            raise PanelError(HTTPStatus.BAD_REQUEST, "No se eligió ningún comprobante")
+        tray = Bandeja(self.s, self.db)
+        if action == "liberar":
+            r = tray.release(claves, usuario, incluir_sin_referencia=bool(body.get("incluir_sin_referencia")),
+                             incluir_separados=bool(body.get("incluir_separados")))
+        elif action == "fecha":
+            r = tray.assign_date(claves, str(body.get("fecha") or ""), usuario)
+        elif action == "separar":
+            r = tray.set_separated(claves, bool(body.get("separar", True)), usuario)
+        elif action == "descartar":
+            r = tray.discard(claves, usuario)
+        else:
+            r = tray.bring_back_rejected_by_date(usuario)
+        log.info("Panel: bandeja %s por %s, %d hechos, %d omitidos", action, usuario, len(r.hechos), len(r.omitidos))
+        return r.as_dict()
 
     def uploads(self) -> dict[str, Any]:
         return {"cargas": [self._carga(r) for r in self.db.uploads(20)]}
@@ -336,6 +369,10 @@ def make_handler(app: PanelApp, user: str, password: str):
                                   {"Content-Disposition": f'attachment; filename="{name}"'})
             if method == "POST" and path == "/api/upload":
                 return self._json(app.upload(self._body(MAX_UPLOAD_BODY), self._user(), self.client_address[0]))
+            if method == "GET" and path == "/api/bandeja":
+                return self._json(app.bandeja())
+            if method == "POST" and path.startswith("/api/bandeja/") and path[13:] in _BANDEJA_ACTIONS:
+                return self._json(app.bandeja_action(path[13:], self._body(), self._user()))
             if method == "GET" and path == "/api/cargas":
                 return self._json(app.uploads())
             m = _CARGA_ROUTE.match(path)

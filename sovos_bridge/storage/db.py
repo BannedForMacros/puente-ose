@@ -109,6 +109,32 @@ CREATE TABLE IF NOT EXISTS cargas_archivos (
 CREATE INDEX IF NOT EXISTS ix_cargas_archivos_carga ON cargas_archivos(carga_id);
 CREATE INDEX IF NOT EXISTS ix_cargas_archivos_sha ON cargas_archivos(sha256);
 CREATE INDEX IF NOT EXISTS ix_cargas_archivos_clave ON cargas_archivos(clave);
+
+-- Bandeja de preparación: subidos desde el panel, esperando que TI los libere.
+CREATE TABLE IF NOT EXISTS bandeja (
+    clave          TEXT PRIMARY KEY,
+    tipo           TEXT NOT NULL,
+    serie_numero   TEXT NOT NULL,
+    nombre_final   TEXT NOT NULL,
+    archivo        TEXT NOT NULL,                 -- TXT original en WORK_DIR/bandeja
+    sha256         TEXT,
+    fecha_emision  TEXT NOT NULL,                 -- fecha original del TXT
+    fecha_nueva    TEXT,                          -- asignada desde el panel (fuera de plazo)
+    importe_total  TEXT,
+    moneda         TEXT,
+    cliente_doc    TEXT,
+    ref_clave      TEXT,                          -- notas: comprobante que modifican
+    especiales     TEXT NOT NULL DEFAULT '',      -- inafecto,exonerado,gratuito,exportacion
+    estado         TEXT NOT NULL,                 -- PREPARADO | SEPARADO | ESPERANDO_REFERENCIA | EN_COLA
+    mensaje        TEXT,
+    carga_id       INTEGER,
+    creado_en      TEXT NOT NULL,
+    actualizado_en TEXT NOT NULL,
+    liberado_en    TEXT,
+    liberado_por   TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_bandeja_estado ON bandeja(estado);
+CREATE INDEX IF NOT EXISTS ix_bandeja_ref ON bandeja(ref_clave);
 """
 
 
@@ -383,3 +409,34 @@ class Database:
                 f"SELECT a.*, c.ts, c.usuario FROM cargas_archivos a JOIN cargas c ON c.id=a.carga_id"
                 f" WHERE a.{col}=? AND a.encolado=1 ORDER BY a.id DESC LIMIT 1", (val,),
             ).fetchone()
+
+    # --- bandeja de preparación ---------------------------------------------
+    def stage(self, row: dict[str, Any]) -> None:
+        ts = now_iso()
+        cols = [*row, "creado_en", "actualizado_en"]
+        with self._tx() as c:
+            c.execute(f"INSERT OR REPLACE INTO bandeja ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                      (*row.values(), ts, ts))
+
+    def staged(self, *estados: str) -> list[sqlite3.Row]:
+        with self._lock:
+            if not estados:
+                return self._conn.execute("SELECT * FROM bandeja ORDER BY fecha_emision, serie_numero").fetchall()
+            marks = ",".join("?" * len(estados))
+            return self._conn.execute(
+                f"SELECT * FROM bandeja WHERE estado IN ({marks}) ORDER BY fecha_emision, serie_numero", estados
+            ).fetchall()
+
+    def staged_one(self, clave: str) -> sqlite3.Row | None:
+        with self._lock:
+            return self._conn.execute("SELECT * FROM bandeja WHERE clave=?", (clave,)).fetchone()
+
+    def update_staged(self, clave: str, **fields: Any) -> None:
+        fields["actualizado_en"] = now_iso()
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._tx() as c:
+            c.execute(f"UPDATE bandeja SET {sets} WHERE clave=?", (*fields.values(), clave))
+
+    def unstage(self, clave: str) -> None:
+        with self._tx() as c:
+            c.execute("DELETE FROM bandeja WHERE clave=?", (clave,))
