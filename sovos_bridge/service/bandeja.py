@@ -238,6 +238,7 @@ class Bandeja:
             "plazos": {"factura": self.s.plazo_factura_dias, "boleta": self.s.plazo_boleta_dias},
             "hoy": hoy.isoformat(),
             "rechazados_por_fecha": rechazados_fecha,
+            "boletas_por_resumen": self.s.boletas_por_resumen,
         }
 
     # --- acciones ---------------------------------------------------------------

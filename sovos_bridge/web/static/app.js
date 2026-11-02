@@ -231,7 +231,7 @@ function retryLabel(kind) {
 }
 
 function rowHtml(d) {
-  const code = d.codigo_sunat || (d.estado === "APROBADO" ? "0" : "");
+  const code = sunatCode(d);
   const msg = cleanMsg(d.mensaje);
   const retry = d.reintento
     ? `<button class="btn btn-secondary btn-sm" type="button" data-retry="${esc(d.clave)}">${retryLabel(d.reintento)}</button>` : "";
@@ -357,9 +357,15 @@ function closeDrawer() {
   if (lastFocus) lastFocus.focus();
 }
 
+// Sovos informa la aceptación como "Authorized"; para SUNAT un comprobante aceptado es el código 0.
+function sunatCode(d) {
+  const c = d.codigo_sunat || "";
+  return d.estado === "APROBADO" && !/^\d+$/.test(c) ? "0" : c;
+}
+
 function replyCallout(d) {
   if (d.estado === "APROBADO") {
-    return `<div class="callout" data-tone="ok"><strong>Aceptado por SUNAT${d.codigo_sunat ? ` (código ${esc(d.codigo_sunat)})` : ""}</strong>${d.mensaje ? `<p>${esc(d.mensaje)}</p>` : ""}</div>`;
+    return `<div class="callout" data-tone="ok"><strong>Aceptado por SUNAT (código ${esc(sunatCode(d))})</strong>${d.mensaje ? `<p>${esc(d.mensaje)}</p>` : ""}</div>`;
   }
   if (!d.mensaje && !d.codigo_sunat) {
     const espera = { RECIBIDO: "El servicio lo está validando y armando para Sovos.", ENVIADO: "Sovos lo recibió; esperando la respuesta de SUNAT.", EN_PROCESO: "Sovos lo está procesando con SUNAT." }[d.estado];
@@ -1041,7 +1047,7 @@ const REF_ESTADO = {
   ERROR_CONEXION: "con error de envío", RECIBIDO: "procesándose", DUPLICADO: "duplicado",
 };
 const STEP_DEFS = [
-  { key: "03", name: "Boletas (resumen diario)", one: "boleta", many: "boletas", match: (r) => r.tipo === "03" },
+  { key: "03", name: "Boletas", one: "boleta", many: "boletas", match: (r) => r.tipo === "03" },
   { key: "01", name: "Facturas", one: "factura", many: "facturas", match: (r) => r.tipo === "01" },
   { key: "nota", name: "Notas", one: "nota", many: "notas", match: (r) => isNota(r) },
 ];
@@ -1073,7 +1079,7 @@ async function loadTray({ silent = false } = {}) {
   try {
     const d = await api("/api/bandeja");
     Object.assign(tray, { rows: d.filas, fechas: d.fechas, plazos: d.plazos, hoy: d.hoy,
-                          rechazados: d.rechazados_por_fecha, loaded: true });
+                          rechazados: d.rechazados_por_fecha, porResumen: !!d.boletas_por_resumen, loaded: true });
     const present = new Set(tray.rows.map((r) => r.clave));
     tray.selected = new Set([...tray.selected].filter((c) => present.has(c)));
     renderTray();
@@ -1199,8 +1205,9 @@ function renderTraySteps() {
     const sub = all.length
       ? `${fmtCount(listos.length, "lista", "listas")}${otros ? `, ${otros.toLocaleString("es-PE")} por revisar` : ""}`
       : "Ninguna en la bandeja";
+    const nombre = s.key === "03" && tray.porResumen ? `${s.name} (resumen diario)` : s.name;
     return `<li class="tray-step" data-empty="${listos.length === 0}">
-      <span class="tray-step-name">${s.name}</span>
+      <span class="tray-step-name">${nombre}</span>
       <span class="tray-step-sub">${sub}</span>
       <button class="btn ${listos.length ? "btn-primary" : "btn-secondary"} btn-sm" type="button" data-tray-action="send-${s.key}" ${listos.length ? "" : "disabled"}>
         ${listos.length ? `Enviar ${fmtCount(listos.length, s.one, s.many)}` : "Nada para enviar"}</button>
@@ -1333,8 +1340,10 @@ async function releaseRows(rows, { title, btn } = {}) {
   const boletas = rows.filter((r) => r.familia === "boleta" && r.grupo !== "fuera_plazo" && r.grupo !== "separado").length;
   const fechasRes = new Set(rows.filter((r) => r.familia === "boleta").map((r) => r.fecha_efectiva)).size;
   const notas = [
-    boletas ? `<p>${fmtCount(boletas, "boleta o nota de boleta va", "boletas y notas de boleta van")} a SUNAT en <strong>resúmenes diarios</strong>, uno por fecha de emisión (${fmtCount(fechasRes, "fecha", "fechas")}), y salen de inmediato${s ? ` (${esc(s.ambiente)})` : ""}.</p>` : "",
-    rows.length - boletas - fuera.length - sep.length > 0 ? `<p>Las facturas pasan a la cola de envío, de la más antigua a la más reciente.</p>` : "",
+    boletas && tray.porResumen
+      ? `<p>${fmtCount(boletas, "boleta o nota de boleta va", "boletas y notas de boleta van")} a SUNAT en <strong>resúmenes diarios</strong>, uno por fecha de emisión (${fmtCount(fechasRes, "fecha", "fechas")}), y salen de inmediato${s ? ` (${esc(s.ambiente)})` : ""}.</p>`
+      : `<p>Pasan a la cola de envío de la más antigua a la más reciente y el servicio los envía a Sovos${s ? ` (${esc(s.ambiente)})` : ""}.</p>`,
+    boletas && tray.porResumen && rows.length - boletas - fuera.length - sep.length > 0 ? `<p>Las facturas pasan a la cola de envío, de la más antigua a la más reciente.</p>` : "",
     esperan ? `<p>${fmtCount(esperan, "nota esperará", "notas esperarán")} a que su comprobante esté aprobado y saldrán solas.</p>` : "",
     fuera.length ? `<p>${fmtCount(fuera.length, "está fuera de plazo y no se incluye", "están fuera de plazo y no se incluyen")}: primero asígnales una fecha nueva.</p>` : "",
   ].join("");
