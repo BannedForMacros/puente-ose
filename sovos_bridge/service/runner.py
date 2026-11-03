@@ -90,6 +90,9 @@ class Service:
                         break
                     try:
                         with self.lock:
+                            # Una nota no sale hasta que el comprobante que modifica esté aprobado.
+                            if self.bandeja.hold_if_reference_pending(path) != "enviar":
+                                continue
                             self.pipeline.process(path)
                     except PermissionError:
                         # En Windows el archivo sigue abierto por el sistema Java.

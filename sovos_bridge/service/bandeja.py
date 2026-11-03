@@ -155,6 +155,45 @@ class Bandeja:
                           + (f", separado por tener {', '.join(esp)}" if estado == SEPARADO else ""))
         return estado
 
+    def hold_if_reference_pending(self, path: Path) -> str:
+        """Nota que llegó directo a la carpeta vigilada (sin pasar por el panel).
+
+        Devuelve "enviar" si puede salir ya, "esperar" si su comprobante está por llegar a la
+        carpeta (se revisa en la próxima vuelta) o "retenida" si pasó a la bandeja como
+        ESPERANDO: el servicio la suelta solo cuando el comprobante quede aprobado.
+        """
+        try:
+            info = parse_filename(path.name)
+        except Exception:
+            return "enviar"                 # el pipeline lo rechaza con su propio mensaje
+        if info.tipo not in ("07", "08") or self.db.get(info.clave) is not None:
+            return "enviar"                 # ya conocida: el pipeline resuelve duplicados y reintentos
+        staged = self.db.staged_one(info.clave)
+        if staged is not None and staged["estado"] == EN_COLA:
+            return "enviar"                 # la soltó la bandeja: su referencia ya se revisó
+        try:
+            doc = parse_file(path, info)
+        except Exception:
+            return "enviar"
+        if doc.referencia is None:
+            return "enviar"
+        ref_clave = f"{doc.ruc_emisor}-{doc.referencia.tipo_comprobante}-{doc.referencia.serie_numero}"
+        if any((d / f"{ref_clave}.txt").exists() for d in (self.s.inbox_dir, self.s.processing_dir)):
+            return "esperar"                # vienen juntos: primero sale el comprobante
+        ref = self._ref_state({"ref_clave": ref_clave})
+        if ref["estado"] in (Estado.APROBADO, "DESCONOCIDA"):
+            return "enviar"                 # DESCONOCIDA: emitido antes del puente, ya está en SUNAT
+        data = path.read_bytes()
+        self.add(data=data, nombre_final=path.name, doc=doc, sha256=hashlib.sha256(data).hexdigest(),
+                 separar=False, carga_id=None, cliente_doc=doc.cliente.numero_documento or "", usuario="servicio")
+        self.db.update_staged(info.clave, estado=ESPERANDO, liberado_por="servicio",
+                              mensaje=f"Espera a que {ref['serie_numero']} esté aprobado")
+        self.db.add_event(info.clave, f"Llegó a la carpeta antes de que {ref['serie_numero']} esté aprobado; "
+                                      "se envía sola en cuanto lo esté")
+        path.unlink()
+        log.info("%s espera a que %s esté aprobado (%s)", info.clave, ref["serie_numero"], ref["estado"])
+        return "retenida"
+
     def bring_back_rejected_by_date(self, usuario: str) -> Resultado:
         """Trae a la bandeja los rechazados por fecha (2108) o que piden resumen diario (1079)."""
         r = Resultado()

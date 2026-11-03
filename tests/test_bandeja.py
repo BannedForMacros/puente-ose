@@ -150,3 +150,39 @@ def test_fecha_original_queda_registrada_al_enviar(settings, db, fake):
     Pipeline(settings, db, fake.client()).process(settings.inbox_dir / FACTURA_TXT.name)
     row = db.get(FACTURA)
     assert row["fecha_emision"] == "2026-06-09" and row["fecha_emision_original"] == "2026-06-03"
+
+
+def test_nota_copiada_a_la_carpeta_espera_a_su_comprobante(settings, db):
+    settings.boletas_por_resumen = False
+    settings.plazo_boleta_dias = 3650
+    settings.inbox_dir.mkdir(parents=True, exist_ok=True)
+    tray = Bandeja(settings, db)
+    nota = settings.inbox_dir / f"{NOTA}.txt"
+    nota.write_text(note_text(), encoding="utf-8")
+
+    # Copiadas juntas: la nota no sale mientras su boleta siga en la carpeta
+    (settings.inbox_dir / BOLETA_TXT.name).write_bytes(BOLETA_TXT.read_bytes())
+    assert tray.hold_if_reference_pending(nota) == "esperar" and nota.exists()
+
+    # La boleta ya se envió pero SUNAT aún no la aprueba: la nota pasa a la bandeja esperando
+    (settings.inbox_dir / BOLETA_TXT.name).unlink()
+    db.reserve(BOLETA, tipo="03", serie_numero="BT05-00125304", archivo="x")
+    db.set_state(BOLETA, Estado.ENVIADO, "enviado")
+    assert tray.hold_if_reference_pending(nota) == "retenida"
+    assert not nota.exists() and db.staged_one(NOTA)["estado"] == bj.ESPERANDO
+
+    # Aprobada la boleta, el servicio suelta la nota y esta ya puede enviarse
+    db.set_state(BOLETA, Estado.APROBADO, "ok")
+    hoy = date.fromisoformat(db.staged_one(NOTA)["fecha_emision"])
+    assert tray.release_waiting(hoy) == 1
+    assert nota.exists() and tray.hold_if_reference_pending(nota) == "enviar"
+
+
+def test_nota_de_comprobante_anterior_al_puente_sale_directo(settings, db):
+    settings.inbox_dir.mkdir(parents=True, exist_ok=True)
+    nota = settings.inbox_dir / f"{NOTA}.txt"
+    nota.write_text(note_text(), encoding="utf-8")
+    assert Bandeja(settings, db).hold_if_reference_pending(nota) == "enviar"
+    boleta = settings.inbox_dir / BOLETA_TXT.name
+    boleta.write_bytes(BOLETA_TXT.read_bytes())
+    assert Bandeja(settings, db).hold_if_reference_pending(boleta) == "enviar"
