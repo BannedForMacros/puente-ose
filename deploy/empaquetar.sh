@@ -77,7 +77,7 @@ unzip -q -j "$CACHE/nssm-2.24.zip" "nssm-2.24/win64/nssm.exe" -d "$STAGE"
 
 paso "Programa (git HEAD $(git -C "$ROOT" rev-parse --short HEAD))"
 mkdir -p "$STAGE/app"
-git -C "$ROOT" archive HEAD sovos_bridge pyproject.toml requirements.txt README.md GUIA_OPERACION.md FICHA_TECNICA.md \
+git -C "$ROOT" archive HEAD sovos_bridge schemas pyproject.toml requirements.txt README.md GUIA_OPERACION.md FICHA_TECNICA.md \
   | tar -x -C "$STAGE/app"
 
 paso "Base de datos y comprobantes"
