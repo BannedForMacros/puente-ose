@@ -328,3 +328,20 @@ def test_solo_cuenta_la_transaccion_mas_reciente(settings, db, fake):
     fake.queue("PUT", "/v1/notifications/PE", httpx.Response(200, json={"success": True}))
     poller.run_once()
     assert db.get(K)["estado"] == Estado.EN_PROCESO
+
+
+def test_factura_detenida_por_detraccion_se_reenvia_al_arrancar(settings, db, fake):
+    from conftest import FACTURA_DETRACCION_TXT
+    pipe, _ = setup(settings, db, fake)
+    clave = "20437310841-01-FA01-00000986"
+    txt = drop(settings, FACTURA_DETRACCION_TXT)
+    pipe.process(txt)                       # con esta versión ya se envía...
+    db.set_state(clave, Estado.VALIDACION_ERROR, "x", mensaje=(  # ...simulamos cómo la dejó la versión anterior
+        "Factura con detracción (tipo de operación 1001): el puente todavía no arma los datos de detracción. "
+        "No se envía para que SUNAT no la rechace; avisar a TI con este TXT"))
+    shutil.copy(FACTURA_DETRACCION_TXT, settings.error_dir / FACTURA_DETRACCION_TXT.name)
+    db.update_fields(clave, archivo=str(settings.error_dir / FACTURA_DETRACCION_TXT.name))
+    pipe.recover()
+    assert (settings.inbox_dir / FACTURA_DETRACCION_TXT.name).exists()
+    fake.queue("POST", "/v1/documents", accepted("doc-fa"))
+    assert pipe.process(settings.inbox_dir / FACTURA_DETRACCION_TXT.name).estado == Estado.ENVIADO

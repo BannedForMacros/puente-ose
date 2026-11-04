@@ -114,19 +114,9 @@ def validate(doc: Document, info: FileInfo, emisor_ruc: str) -> ValidationResult
                 w.append(f"La nota {doc.serie} referencia a {ref.serie_numero}: la letra de serie no coincide")
 
     # --- detracción y forma de pago (facturas) ---------------------------
-    if doc.tipo_operacion in cat.TIPO_OPERACION_DETRACCION:
-        # SUNAT exige cuenta del Banco de la Nación, código de bien/servicio,
-        # porcentaje y monto; el TXT todavía no tiene esos campos identificados.
-        e.append(f"Factura con detracción (tipo de operación {doc.tipo_operacion}): el puente todavía no arma "
-                 "los datos de detracción. No se envía para que SUNAT no la rechace; avisar a TI con este TXT")
-    elif (doc.tipo_comprobante == "01" and dec(doc.importe_total) > MONTO_DETRACCION
-          and dec(doc.totales.get("1001")) > 0):
-        w.append(f"Factura gravada mayor a S/ {MONTO_DETRACCION} enviada sin detracción: "
-                 "confirmar que no corresponde")
-    if doc.tipo_comprobante == "01" and doc.fecha_vencimiento and _FECHA.match(doc.fecha_vencimiento) \
-            and doc.fecha_vencimiento > doc.fecha_emision:
-        w.append(f"Vence el {doc.fecha_vencimiento}, después de la emisión: se envía como pago al contado; "
-                 "si es al crédito faltan las cuotas")
+    if doc.tipo_comprobante == "01":
+        _detraccion(doc, e, w)
+        _forma_pago(doc, e, w)
 
     # --- tributos y catálogos (advertencias) ------------------------------
     for t in doc.tributos:
@@ -174,3 +164,66 @@ def validate(doc: Document, info: FileInfo, emisor_ruc: str) -> ValidationResult
             w.append(f"Redondeo ítem {it.numero_item}: precio con IGV x cantidad difiere en {diff.quantize(Decimal('0.0001'))}")
 
     return r
+
+
+def _detraccion(doc: Document, e: list[str], w: list[str]) -> None:
+    d = doc.detraccion
+    sujeta = doc.tipo_operacion in cat.TIPO_OPERACION_DETRACCION
+    if sujeta and d is None:
+        e.append(f"Factura con detracción (tipo de operación {doc.tipo_operacion}) sin los datos de detracción "
+                 "en el TXT (ADI @@codBienServDetr, @@numCuentaBcoNacionDetr, @@montoDetr, @@porcDetr)")
+        return
+    if d is None:
+        if dec(doc.importe_total) > MONTO_DETRACCION and dec(doc.totales.get("1001")) > 0:
+            w.append(f"Factura gravada mayor a S/ {MONTO_DETRACCION} enviada sin detracción: "
+                     "confirmar que no corresponde")
+        return
+    if not sujeta:
+        e.append(f"El TXT trae datos de detracción pero el tipo de operación es {doc.tipo_operacion or 'vacío'} "
+                 "(debe ser 1001 a 1004)")
+    faltan = [n for n, v in (("código de bien o servicio", d.codigo), ("cuenta del Banco de la Nación", d.cuenta),
+                             ("porcentaje", d.porcentaje), ("monto", d.monto)) if not v]
+    if faltan:
+        e.append("Detracción incompleta: falta " + ", ".join(faltan))
+        return
+    if not re.fullmatch(r"\d{3}", d.codigo):
+        e.append(f"Código de detracción '{d.codigo}' fuera del catálogo 54 (3 dígitos)")
+    if dec(d.monto) <= 0 or dec(d.monto) >= dec(doc.importe_total):
+        e.append(f"Monto de detracción {d.monto} no válido para un total de {doc.importe_total}")
+    elif doc.moneda == "PEN":
+        esperado = (dec(doc.importe_total) * dec(d.porcentaje) / 100).quantize(Decimal("0.01"))
+        if abs(esperado - dec(d.monto)) > Decimal("1"):
+            e.append(f"Monto de detracción {d.monto} no corresponde al {d.porcentaje}% del total "
+                     f"({esperado})")
+    if dec(doc.importe_total) <= MONTO_DETRACCION:
+        w.append(f"Detracción en una factura de S/ {MONTO_DETRACCION} o menos: confirmar que corresponde")
+
+
+def _forma_pago(doc: Document, e: list[str], w: list[str]) -> None:
+    if doc.forma_pago not in ("", "Contado", "Credito"):
+        e.append(f"Forma de pago '{doc.forma_pago}' no válida (Contado o Credito)")
+        return
+    if doc.forma_pago != "Credito":
+        if doc.cuotas:
+            e.append("El TXT trae cuotas pero la forma de pago no es al crédito")
+        elif doc.fecha_vencimiento and _FECHA.match(doc.fecha_vencimiento) \
+                and doc.fecha_vencimiento > doc.fecha_emision:
+            w.append(f"Vence el {doc.fecha_vencimiento}, después de la emisión: se envía como pago al contado; "
+                     "si es al crédito faltan las cuotas")
+        return
+    if not doc.cuotas:
+        e.append("Factura al crédito sin cuotas (registro CUO)")
+        return
+    neto = doc.neto_pendiente
+    cuotas = doc.cuotas_netas()
+    suma = sum((dec(c.monto) for c in cuotas), Decimal(0))
+    if suma != neto:
+        e.append(f"Las cuotas suman {suma} y deben sumar el monto pendiente {neto} "
+                 "(importe total menos detracción)")
+    for c in cuotas:
+        if not re.fullmatch(r"Cuota\d{3}", c.cuota):
+            e.append(f"Cuota '{c.cuota}' con nombre no válido (Cuota001, Cuota002...)")
+        if dec(c.monto) <= 0:
+            e.append(f"{c.cuota}: monto {c.monto} no válido")
+        if not _FECHA.match(c.fecha_vencimiento) or c.fecha_vencimiento <= doc.fecha_emision:
+            e.append(f"{c.cuota}: la fecha de pago {c.fecha_vencimiento or '(vacía)'} debe ser posterior a la emisión")

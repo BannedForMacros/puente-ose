@@ -16,11 +16,14 @@ from sovos_bridge.sbd import (
     validate_sbd,
 )
 from sovos_bridge.service import files
+from sovos_bridge.service.operations import retry_one
 from sovos_bridge.sovos import SovosAuthError, SovosClient, SovosClientError, SovosConnectionError
 from sovos_bridge.storage import Database, Estado
 from sovos_bridge.validation import validate
 
 log = logging.getLogger(__name__)
+
+_DETRACCION_PENDIENTE = "el puente todavía no arma los datos de detracción"
 
 
 @dataclass
@@ -259,6 +262,11 @@ class Pipeline:
             elif path.exists() and path.parent == self.s.processing_dir:
                 files.move(path, self.s.inbox_dir)
                 log.info("%s devuelto a la bandeja para reprocesar", path.name)
+
+        # Facturas detenidas porque el puente aún no armaba la detracción: ahora sí, se reintentan solas.
+        for row in self.db.by_states(Estado.VALIDACION_ERROR):
+            if _DETRACCION_PENDIENTE in (row["mensaje"] or ""):
+                log.info("%s", retry_one(self.s, self.db, row)[1])
 
         pending = {Path(r["archivo"]).name for r in self.db.by_states(*(Estado.ENVIADO, Estado.EN_PROCESO))
                    if r["archivo"]}

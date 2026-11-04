@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sovos_bridge.parser.layout import LAYOUTS, LAYOUTS_BY_TYPE, REPEATABLE, REQUIRED
-from sovos_bridge.parser.models import Document, Item, Party, Reference, Tax
+from sovos_bridge.parser.models import Cuota, Detraccion, Document, Item, Party, Reference, Tax
 from sovos_bridge.parser.tokenizer import decode_bytes, pairs, split_fields, split_group
 
 log = logging.getLogger(__name__)
@@ -112,6 +112,22 @@ def read_records(text: str, tipo: str = "03") -> dict[str, list[dict[str, str]]]
     return records
 
 
+# Claves de ADI con los datos de detracción -> campo de Detraccion
+_ADI_DETRACCION = {"@@codBienServDetr": "codigo", "@@numCuentaBcoNacionDetr": "cuenta",
+                   "@@medioPagoDetr": "medio_pago", "@@montoDetr": "monto", "@@porcDetr": "porcentaje"}
+
+
+def _forma_pago(value: str) -> str:
+    v = value.strip().lower().replace("é", "e")
+    return {"contado": "Contado", "credito": "Credito"}.get(v, value.strip())
+
+
+def _detraccion(adis: list[dict[str, str]]) -> Detraccion | None:
+    datos = {_ADI_DETRACCION[a.get("clave", "").strip()]: a.get("valor", "").strip()
+             for a in adis if a.get("clave", "").strip() in _ADI_DETRACCION}
+    return Detraccion(**datos) if datos else None
+
+
 def _party(values: dict[str, str]) -> Party:
     return Party(**{k: v for k, v in values.items() if k in Party.model_fields})
 
@@ -184,6 +200,11 @@ def parse_text(text: str, info: FileInfo, encoding: str = "utf-8") -> Document:
         fecha_vencimiento=ide.get("fecha_vencimiento", ""),
         moneda=ide.get("moneda", "") or "PEN",
         tipo_operacion=cab.get("tipo_operacion", ""),
+        forma_pago=_forma_pago(ide.get("forma_pago", "")),
+        monto_pendiente=ide.get("monto_pendiente", ""),
+        cuotas=[Cuota(cuota=c.get("cuota", ""), monto=c.get("monto", ""),
+                      fecha_vencimiento=c.get("fecha_vencimiento", "")) for c in records.get("CUO", [])],
+        detraccion=_detraccion(records.get("ADI", [])),
         emisor=_party(emi),
         cliente=_party(rec),
         totales=totales,

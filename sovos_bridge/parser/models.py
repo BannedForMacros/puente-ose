@@ -67,6 +67,21 @@ class Reference(BaseModel):
     descripcion_motivo: str = ""
 
 
+class Cuota(BaseModel):
+    cuota: str                  # Cuota001
+    monto: str
+    fecha_vencimiento: str
+
+
+class Detraccion(BaseModel):
+    """Datos de detracción (registros ADI con claves @@...Detr)."""
+    codigo: str = ""            # bien o servicio, catálogo 54
+    cuenta: str = ""            # cuenta del Banco de la Nación
+    medio_pago: str = ""        # catálogo 59
+    monto: str = ""
+    porcentaje: str = ""
+
+
 class Document(BaseModel):
     ruc_emisor: str
     tipo_comprobante: str        # 01, 03, 07, 08
@@ -76,7 +91,10 @@ class Document(BaseModel):
     fecha_vencimiento: str = ""
     moneda: str = "PEN"
     tipo_operacion: str = ""
-    forma_pago: str = ""
+    forma_pago: str = ""         # Contado | Credito ("" = TXT antiguo, contado)
+    monto_pendiente: str = ""
+    cuotas: list[Cuota] = Field(default_factory=list)
+    detraccion: Detraccion | None = None
     emisor: Party
     cliente: Party
     totales: dict[str, str] = Field(default_factory=dict)   # código cat. 14 -> monto
@@ -102,6 +120,27 @@ class Document(BaseModel):
     def clave(self) -> str:
         """Identificador único: RUC-tipo-serie-número (= SenderDocumentId)."""
         return f"{self.ruc_emisor}-{self.tipo_comprobante}-{self.serie_numero}"
+
+    @property
+    def neto_pendiente(self) -> Decimal:
+        """Al crédito: lo que el cliente paga a la clínica (importe total menos la detracción)."""
+        monto_detr = dec(self.detraccion.monto) if self.detraccion else Decimal(0)
+        return dec(self.importe_total) - monto_detr
+
+    def cuotas_netas(self) -> list[Cuota]:
+        """Cuotas que se informan a SUNAT: deben sumar el neto pendiente.
+
+        El sistema Java manda una cuota por el importe total; SUNAT pide descontar
+        la detracción, que el cliente deposita aparte al Banco de la Nación. Se
+        descuenta de la última cuota.
+        """
+        cuotas = [c.model_copy() for c in self.cuotas]
+        if cuotas and self.detraccion:
+            suma = sum((dec(c.monto) for c in cuotas), Decimal(0))
+            if suma == dec(self.importe_total):
+                ultima = cuotas[-1]
+                ultima.monto = str((dec(ultima.monto) - dec(self.detraccion.monto)).quantize(Decimal("0.01")))
+        return cuotas
 
     @property
     def es_nota(self) -> bool:

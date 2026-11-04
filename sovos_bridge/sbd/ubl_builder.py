@@ -46,6 +46,39 @@ class _B:
         return self.cbc(parent, tag, value, currencyID=self.cur)
 
 
+LEYENDA_DETRACCION = "2006"     # catálogo 52: "Operación sujeta a detracción"
+
+
+def _payment(b: _B, root, doc: Document, forma_pago_defecto: str) -> None:
+    """Detracción (medio de pago y monto) y forma de pago, con sus cuotas si es al crédito."""
+    d = doc.detraccion
+    if d:
+        pm = b.cac(root, "PaymentMeans")
+        b.cbc(pm, "ID", "Detraccion")
+        b.cbc(pm, "PaymentMeansCode", d.medio_pago or "001", listName="Medio de pago",
+              listAgencyName="PE:SUNAT", listURI=CAT + "59")
+        b.cbc(b.cac(pm, "PayeeFinancialAccount"), "ID", d.cuenta)
+        pt = b.cac(root, "PaymentTerms")
+        b.cbc(pt, "ID", "Detraccion")
+        b.cbc(pt, "PaymentMeansID", d.codigo, schemeName="SUNAT:Codigo de detraccion",
+              schemeAgencyName="PE:SUNAT", schemeURI=CAT + "54")
+        b.cbc(pt, "PaymentPercent", d.porcentaje)
+        b.cbc(pt, "Amount", d.monto, currencyID="PEN")    # la detracción siempre en soles
+    forma = doc.forma_pago or forma_pago_defecto
+    pt = b.cac(root, "PaymentTerms")
+    b.cbc(pt, "ID", "FormaPago")
+    b.cbc(pt, "PaymentMeansID", forma)
+    if forma != "Credito":
+        return
+    b.amount(pt, "Amount", _fmt2(doc.neto_pendiente))
+    for c in doc.cuotas_netas():
+        pt = b.cac(root, "PaymentTerms")
+        b.cbc(pt, "ID", "FormaPago")
+        b.cbc(pt, "PaymentMeansID", c.cuota)
+        b.amount(pt, "Amount", c.monto)
+        b.cbc(pt, "PaymentDueDate", c.fecha_vencimiento)
+
+
 def root_name(doc: Document, note_root: str = "CreditNote") -> str:
     if doc.tipo_comprobante == "07":
         return "CreditNote" if note_root == "CreditNote" else "Invoice"
@@ -97,7 +130,10 @@ def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defect
         b.cbc(root, "InvoiceTypeCode", doc.tipo_comprobante,
               listAgencyName="PE:SUNAT", listID=doc.tipo_operacion or None, listName="Tipo de Documento",
               listSchemeURI=CAT + "51", listURI=CAT + "01", name="Tipo de Operacion")
-    for code, text in doc.leyendas:
+    leyendas = list(doc.leyendas)
+    if doc.detraccion and not any(code == LEYENDA_DETRACCION for code, _ in leyendas):
+        leyendas.append((LEYENDA_DETRACCION, "Operación sujeta a detracción"))
+    for code, text in leyendas:
         b.cbc(root, "Note", text, languageLocaleID=code)
     b.cbc(root, "DocumentCurrencyCode", doc.moneda,
           listAgencyName=UNECE, listID="ISO 4217 Alpha", listName="Currency")
@@ -111,9 +147,7 @@ def build_ubl(doc: Document, *, note_root: str = "CreditNote", forma_pago_defect
     _customer(b, root, doc.cliente, tax_scheme=sovos_sci)
 
     if doc.tipo_comprobante == "01":
-        pt = b.cac(root, "PaymentTerms")
-        b.cbc(pt, "ID", "FormaPago")
-        b.cbc(pt, "PaymentMeansID", doc.forma_pago or forma_pago_defecto)
+        _payment(b, root, doc, forma_pago_defecto)
 
     _tax_total(b, root, doc)
 

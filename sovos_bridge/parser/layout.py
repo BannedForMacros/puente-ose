@@ -20,6 +20,8 @@ LAYOUTS: dict[str, dict[int, str]] = {
         5: "moneda",
         6: "desconocido_6",          # vacío en boletas; ¿forma de pago u orden de compra?
         7: "fecha_vencimiento",
+        8: "forma_pago",             # Contado | Credito (vacío en los TXT antiguos: contado)
+        9: "monto_pendiente",        # al crédito: monto que queda por pagar
     },
     "EMI": {
         1: "tipo_documento",
@@ -82,6 +84,15 @@ LAYOUTS: dict[str, dict[int, str]] = {
         12: "desconocido_12", 13: "desconocido_13",
         14: "total_impuestos",
     },
+    "CUO": {                         # una línea por cuota (pago al crédito)
+        1: "cuota",                  # Cuota001, Cuota002...
+        2: "monto",
+        3: "fecha_vencimiento",
+    },
+    "ADI": {                         # datos adicionales: @@codBienServDetr, @@montoDetr... o texto libre
+        1: "clave",
+        2: "valor",
+    },
 }
 
 # Notas de crédito/débito: el sistema Java usa un layout más corto en IDE, CAB
@@ -132,8 +143,8 @@ LAYOUTS_BY_TYPE: dict[str, dict[str, dict[int, str]]] = {
     "08": {**LAYOUTS, **_NOTE_LAYOUTS},  # nota de débito: sin ejemplo real aún, se asume igual a la NC
 }
 
-# Registros que pueden repetirse (una línea por ítem).
-REPEATABLE = {"DET"}
+# Registros que pueden repetirse (una línea por ítem, cuota o dato adicional).
+REPEATABLE = {"DET", "CUO", "ADI"}
 
 # Registros obligatorios por tipo de comprobante.
 REQUIRED = {

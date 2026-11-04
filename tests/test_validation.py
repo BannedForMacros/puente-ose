@@ -1,7 +1,7 @@
 from sovos_bridge.parser import parse_file, parse_filename, parse_text
 from sovos_bridge.validation import ruc_valido, validate
 
-from conftest import BOLETA_MULTI_TXT, BOLETA_TXT, FACTURA_TXT, RUC, note_text
+from conftest import BOLETA_MULTI_TXT, BOLETA_TXT, FACTURA_DETRACCION_TXT, FACTURA_TXT, RUC, note_text
 
 
 def run(path):
@@ -92,7 +92,7 @@ def test_gratuito_no_genera_descuadre():
     assert not any("cuadre" in w.lower() for w in r.advertencias), r.advertencias
 
 
-def test_detraccion_se_bloquea_hasta_tener_sus_datos():
+def test_detraccion_sin_sus_datos_se_bloquea():
     r = _factura(
         "CAB|1001|1000.00|1002|0.00|1003|0.00|1004|0.00|1000|0.00||||||[1000|180.00]||||1180.00||0.00|1001|"
         "[1000|MIL CIENTO OCHENTA CON 00/100|2006|OPERACION SUJETA A DETRACCION]|180.00|",
@@ -109,3 +109,32 @@ def test_factura_grande_sin_detraccion_y_con_vencimiento_avisa():
     assert r.ok, r.errores
     assert any("sin detracción" in w for w in r.advertencias)
     assert any("al crédito" in w for w in r.advertencias)
+
+
+def test_factura_al_credito_con_detraccion_real():
+    doc = parse_file(FACTURA_DETRACCION_TXT)
+    assert doc.forma_pago == "Credito" and doc.tipo_operacion == "1001"
+    assert (doc.detraccion.codigo, doc.detraccion.cuenta, doc.detraccion.monto, doc.detraccion.porcentaje) == \
+        ("022", "00-238-003229", "114.39", "12.00")
+    # El TXT trae una cuota por el total; a SUNAT va el neto (total menos detracción)
+    assert str(doc.neto_pendiente) == "838.85"
+    assert [(c.cuota, c.monto, c.fecha_vencimiento) for c in doc.cuotas_netas()] == \
+        [("Cuota001", "838.85", "2026-12-19")]
+    r = run(FACTURA_DETRACCION_TXT)
+    assert r.ok, r.errores
+
+
+def test_credito_y_detraccion_mal_armados_se_bloquean(tmp_path):
+    base = FACTURA_DETRACCION_TXT.read_text(encoding="utf-8")
+    casos = {
+        "sin cuotas": "\n".join(l for l in base.splitlines() if not l.startswith("CUO|")),
+        "Monto de detracción": base.replace("@@montoDetr|114.39", "@@montoDetr|50.00"),
+        "cuenta del Banco": base.replace("ADI|@@numCuentaBcoNacionDetr|00-238-003229", ""),
+        "fecha de pago": base.replace("CUO|Cuota001|953.24|2026-12-19", "CUO|Cuota001|953.24|2026-11-01"),
+        "deben sumar": base.replace("CUO|Cuota001|953.24|", "CUO|Cuota001|900.00|"),
+    }
+    for esperado, txt in casos.items():
+        p = tmp_path / FACTURA_DETRACCION_TXT.name
+        p.write_text(txt, encoding="utf-8")
+        r = run(p)
+        assert any(esperado in e for e in r.errores), (esperado, r.errores)

@@ -7,7 +7,7 @@ from sovos_bridge.parser import parse_file, parse_filename, parse_text
 from sovos_bridge.sbd import SbdOptions, build_sbd, serialize, validate_sbd
 from sovos_bridge.sbd.namespaces import CAC, CBC, CRN, DBN, INV, SBD, SCI, SVS
 
-from conftest import BOLETA_TXT, FACTURA_TXT, NOTAS_TXT, note_text
+from conftest import BOLETA_TXT, FACTURA_DETRACCION_TXT, FACTURA_TXT, NOTAS_TXT, note_text
 
 NS = {"sbd": SBD, "svs": SVS, "sci": SCI}
 
@@ -112,3 +112,21 @@ def test_sci_sigue_el_ejemplo_oficial_de_sovos_peru():
     assert inv.findtext(f"{{{CBC}}}ProfileID") == "0101"
     ids = [e.text for e in inv.iterfind(f".//{{{CAC}}}PartyTaxScheme/{{{CBC}}}CompanyID")]
     assert ids == ["20437310841", "00000000"]
+
+
+def test_ubl_con_detraccion_y_cuotas():
+    from sovos_bridge.sbd.ubl_builder import build_ubl
+    ubl = build_ubl(parse_file(FACTURA_DETRACCION_TXT), ubl_extensions=True)
+    ns = {"cbc": CBC, "cac": CAC}
+    assert ubl.xpath("cbc:InvoiceTypeCode/@listID", namespaces=ns) == ["1001"]
+    assert ubl.xpath("cbc:Note[@languageLocaleID='2006']/text()", namespaces=ns) == ["Operación sujeta a detracción"]
+    pm = ubl.xpath("cac:PaymentMeans", namespaces=ns)[0]
+    assert pm.xpath("cbc:ID/text()", namespaces=ns) == ["Detraccion"]
+    assert pm.xpath("cac:PayeeFinancialAccount/cbc:ID/text()", namespaces=ns) == ["00-238-003229"]
+    terms = [[e.text for e in t] for t in ubl.xpath("cac:PaymentTerms", namespaces=ns)]
+    assert terms == [["Detraccion", "022", "12.00", "114.39"],
+                     ["FormaPago", "Credito", "838.85"],
+                     ["FormaPago", "Cuota001", "838.85", "2026-12-19"]]
+    # PaymentMeans va antes que PaymentTerms y ambos antes de TaxTotal (orden del XSD)
+    tags = [etree.QName(e).localname for e in ubl]
+    assert tags.index("PaymentMeans") < tags.index("PaymentTerms") < tags.index("TaxTotal")
