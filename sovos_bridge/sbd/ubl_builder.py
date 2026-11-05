@@ -60,7 +60,7 @@ def _payment(b: _B, root, doc: Document, forma_pago_defecto: str) -> None:
         b.cbc(b.cac(pm, "PayeeFinancialAccount"), "ID", d.cuenta)
         pt = b.cac(root, "PaymentTerms")
         b.cbc(pt, "ID", "Detraccion")
-        b.cbc(pt, "PaymentMeansID", d.codigo, schemeName="SUNAT:Codigo de detraccion",
+        b.cbc(pt, "PaymentMeansID", d.codigo, schemeName="Codigo de detraccion",
               schemeAgencyName="PE:SUNAT", schemeURI=CAT + "54")
         b.cbc(pt, "PaymentPercent", d.porcentaje)
         b.cbc(pt, "Amount", d.monto, currencyID="PEN")    # la detracción siempre en soles

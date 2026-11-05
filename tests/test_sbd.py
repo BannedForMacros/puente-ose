@@ -123,6 +123,9 @@ def test_ubl_con_detraccion_y_cuotas():
     pm = ubl.xpath("cac:PaymentMeans", namespaces=ns)[0]
     assert pm.xpath("cbc:ID/text()", namespaces=ns) == ["Detraccion"]
     assert pm.xpath("cac:PayeeFinancialAccount/cbc:ID/text()", namespaces=ns) == ["00-238-003229"]
+    # SUNAT observa (aprobada, con observación) si schemeName lleva el prefijo "SUNAT:"
+    assert ubl.xpath("cac:PaymentTerms/cbc:PaymentMeansID[.='022']/@schemeName", namespaces=ns) == \
+        ["Codigo de detraccion"]
     terms = [[e.text for e in t] for t in ubl.xpath("cac:PaymentTerms", namespaces=ns)]
     assert terms == [["Detraccion", "022", "12.00", "114.39"],
                      ["FormaPago", "Credito", "838.85"],
