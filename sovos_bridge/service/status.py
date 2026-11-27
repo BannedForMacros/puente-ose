@@ -83,6 +83,9 @@ class StatusPoller:
         xml_path, pdf_path = row["xml_path"], row["pdf_path"]
         approved = rejected = None
         completed = False
+        # Un rechazado nunca trae PDF: sin esto se bajaba el mismo XML en cada aviso (~9 veces).
+        se_rechaza = any(n.is_rejected for n in notifs)
+        xml_de_este_aviso = False
         for n in notifs:
             nueva = self.db.save_notification(n.notification_id, clave=clave, document_id=n.document_id,
                                               response_code=n.response_code)
@@ -95,6 +98,8 @@ class StatusPoller:
                     # Los enlaces no traen extensión: el tipo se sabe recién al bajarlo.
                     if xml_path and pdf_path and cdr_path.exists():
                         break
+                    if se_rechaza and xml_de_este_aviso:
+                        break
                     if att.kind == "pdf" and pdf_path:
                         continue
                     saved = self._save_attachment(clave, att, when)
@@ -102,6 +107,7 @@ class StatusPoller:
                         pdf_path = str(saved)
                     elif saved and saved.suffix == ".xml" and not saved.name.startswith("R-"):
                         xml_path = str(saved)
+                        xml_de_este_aviso = True
             if nueva and n.content:
                 (files.month_dir(self.s.output_dir, when) / f"{clave}-respuesta-sovos-{n.notification_id}.xml"
                  ).write_bytes(n.content)

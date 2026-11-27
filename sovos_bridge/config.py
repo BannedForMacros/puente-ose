@@ -42,8 +42,11 @@ class Settings(BaseModel):
     # Boletas: SUNAT solo las acepta una por una si son recientes (si no, error 1079); por
     # resumen diario, hasta el séptimo día calendario siguiente a la emisión.
     plazo_boleta_dias: int = Field(7, ge=0)
+    # Boletas y sus notas que salen una por una (BOLETAS_POR_RESUMEN=false): pasado este plazo
+    # SUNAT responde 1079 y solo las acepta en un resumen diario. Confirmar el número con contabilidad.
+    plazo_boleta_individual_dias: int = Field(3, ge=0)
     # La bandeja envía las boletas y sus notas en resúmenes diarios (uno por fecha de emisión)
-    boletas_por_resumen: bool = True
+    boletas_por_resumen: bool = False
     # Cómo pedirle a Sovos el resumen diario (no documentado para Perú; ver sbd.SummaryProduct)
     sovos_rc_output_schema: str = "summaryDocuments"
     sovos_rc_meta_schema: str = ""

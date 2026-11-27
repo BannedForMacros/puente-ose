@@ -90,6 +90,9 @@ class Service:
                         break
                     try:
                         with self.lock:
+                            # Con fecha vencida SUNAT lo rechazaría (1079/2108): queda en la bandeja.
+                            if self.bandeja.hold_if_out_of_term(path):
+                                continue
                             # Una nota no sale hasta que el comprobante que modifica esté aprobado.
                             if self.bandeja.hold_if_reference_pending(path) != "enviar":
                                 continue

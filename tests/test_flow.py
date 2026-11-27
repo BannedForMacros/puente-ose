@@ -154,6 +154,7 @@ def test_timeout_de_estado(settings, db, fake):
 
 
 def test_error_de_conexion_antes_de_enviar_y_reintento(settings, db, fake):
+    settings.plazo_factura_dias = settings.plazo_boleta_individual_dias = 3650   # muestras antiguas: aquí no se prueba el plazo
     pipe, _ = setup(settings, db, fake)
     fake.queue("POST", "/v1/documents", httpx.ConnectError("sin red"))
     r = pipe.process(drop(settings))
@@ -171,6 +172,7 @@ def test_error_de_conexion_antes_de_enviar_y_reintento(settings, db, fake):
 
 
 def test_envio_incierto_requiere_forzar(settings, db, fake):
+    settings.plazo_factura_dias = settings.plazo_boleta_individual_dias = 3650   # muestras antiguas: aquí no se prueba el plazo
     pipe, _ = setup(settings, db, fake)
     fake.queue("POST", "/v1/documents", httpx.ReadTimeout("t"))
     pipe.process(drop(settings))
@@ -331,6 +333,7 @@ def test_solo_cuenta_la_transaccion_mas_reciente(settings, db, fake):
 
 
 def test_factura_detenida_por_detraccion_se_reenvia_al_arrancar(settings, db, fake):
+    settings.plazo_factura_dias = settings.plazo_boleta_individual_dias = 3650   # muestras antiguas: aquí no se prueba el plazo
     from conftest import FACTURA_DETRACCION_TXT
     pipe, _ = setup(settings, db, fake)
     clave = "20437310841-01-FA01-00000986"

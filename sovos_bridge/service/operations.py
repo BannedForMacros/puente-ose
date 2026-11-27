@@ -71,6 +71,11 @@ def retry_one(s: Settings, db: Database, row, *, forzar: bool = False) -> tuple[
     if row["envio_incierto"]:
         db.update_fields(clave, envio_incierto=0, envio_iniciado_en=None)
         db.add_event(clave, "retry-errors --forzar: se libera el envío incierto (verificado por TI)")
+    # Con la fecha vencida SUNAT lo volvería a rechazar (1079/2108): a la bandeja para cambiarle la fecha.
+    from sovos_bridge.service.bandeja import Bandeja   # evita import circular
+    if Bandeja(s, db).hold_if_out_of_term(txt, "reintento", mover=False):
+        return True, (f"{clave}: fuera de plazo con su fecha de emisión; quedó en la bandeja de preparación "
+                      "para asignarle una fecha nueva (no se reenvió)")
     files.remove_error_log(txt)
     dest = files.move(txt, s.inbox_dir)
     db.update_fields(clave, archivo=str(dest))

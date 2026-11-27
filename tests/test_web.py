@@ -90,6 +90,7 @@ def test_detalle_trae_historial_y_tipo_de_reintento(settings, db, fake):
 
 
 def test_reintento_devuelve_el_txt_a_la_bandeja(settings, db, fake):
+    settings.plazo_factura_dias = settings.plazo_boleta_individual_dias = 3650   # muestras antiguas: aquí no se prueba el plazo
     rechazar(settings, db, fake)
     r = PanelApp(settings, db, None).retry(K, forzar=False)
     assert r["ok"] and (settings.inbox_dir / BOLETA_TXT.name).exists()

@@ -308,6 +308,12 @@ class Database:
                 (serie_numero.upper(), serie_numero.upper()),
             ).fetchall()
 
+    def serie_rows(self, serie: str) -> list[sqlite3.Row]:
+        """Comprobantes de una serie (BT05), para mantener el orden de numeración al cambiar fechas."""
+        with self._lock:
+            return self._conn.execute("SELECT * FROM documentos WHERE serie_numero LIKE ?",
+                                      (serie.upper() + "-%",)).fetchall()
+
     def by_document_id(self, document_id: str) -> sqlite3.Row | None:
         with self._lock:
             return self._conn.execute("SELECT * FROM documentos WHERE document_id=?", (document_id,)).fetchone()

@@ -69,6 +69,11 @@ def test_resumen_exige_misma_fecha_y_maximo_500():
         build_summary(ResumenId("2026-10-30", 1), "2026-01-01", RUC, "C", [d])
 
 
+@pytest.fixture(autouse=True)
+def _modo_resumen(settings):
+    settings.boletas_por_resumen = True     # estas pruebas son del envío por resumen diario
+
+
 @pytest.fixture
 def signer(tmp_path):
     pfx, _ = make_pfx(tmp_path)

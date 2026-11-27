@@ -54,7 +54,7 @@ HEARTBEAT_STALE_SECONDS = 120
 FILE_KINDS = {"txt": "archivo", "xml": "xml_path", "pdf": "pdf_path", "sbd": "sbd_path"}
 _CONFIG_ACTIONS = {"certificado", "sovos", "carpeta", "clave"}
 MAX_CONFIG_BODY = 1024 * 1024
-_BANDEJA_ACTIONS = {"liberar", "fecha", "separar", "descartar", "traer-rechazados"}
+_BANDEJA_ACTIONS = {"liberar", "fecha", "fecha-auto", "separar", "descartar", "traer-rechazados"}
 _CARGA_ROUTE = re.compile(r"^/api/cargas/(\d+)\.csv$")
 _DOC_ROUTE = re.compile(r"^/api/documents/([^/]+)(?:/(retry|consultar|archivo/(txt|xml|pdf|sbd)))?$")
 
@@ -344,8 +344,18 @@ class PanelApp:
             r = tray.set_separated(claves, bool(body.get("separar", True)), usuario)
         elif action == "descartar":
             r = tray.discard(claves, usuario)
+        elif action == "fecha-auto":
+            if body.get("simular"):
+                return {"plan": tray.plan_fechas(claves)}
+            r = tray.assign_auto(claves, usuario)
         else:
-            r = tray.bring_back_rejected_by_date(usuario)
+            tipos = body.get("tipos") or []
+            if not isinstance(tipos, list) or not all(t in ("01", "03", "07", "08") for t in tipos):
+                raise PanelError(HTTPStatus.BAD_REQUEST, "Tipos de comprobante inválidos")
+            desde, hasta = str(body.get("desde") or ""), str(body.get("hasta") or "")
+            if desde and hasta and desde > hasta:
+                raise PanelError(HTTPStatus.BAD_REQUEST, "La fecha inicial es posterior a la final")
+            r = tray.bring_back_rejected_by_date(usuario, desde=desde, hasta=hasta, tipos=tipos)
         log.info("Panel: bandeja %s por %s, %d hechos, %d omitidos", action, usuario, len(r.hechos), len(r.omitidos))
         return r.as_dict()
 

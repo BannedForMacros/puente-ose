@@ -46,7 +46,7 @@ def test_cambiar_fecha_corre_el_vencimiento_y_no_toca_lo_demas():
 
 def test_fechas_disponibles_segun_plazo(settings):
     assert bj.fechas_disponibles(settings, "factura", HOY) == ["2026-06-10", "2026-06-09", "2026-06-08", "2026-06-07"]
-    assert len(bj.fechas_disponibles(settings, "boleta", HOY)) == settings.plazo_boleta_dias + 1
+    assert len(bj.fechas_disponibles(settings, "boleta", HOY)) == settings.plazo_boleta_individual_dias + 1
 
 
 def test_factura_vencida_no_sale_hasta_asignarle_fecha(settings, db):
@@ -80,7 +80,7 @@ def test_separados_no_salen_salvo_que_se_pida(settings, db):
 
 def test_nota_espera_a_su_comprobante(settings, db):
     settings.boletas_por_resumen = False    # envío una por una (flujo diario)
-    settings.plazo_boleta_dias = 3650      # la nota de muestra es de marzo; aquí solo importa la espera
+    settings.plazo_boleta_individual_dias = 3650   # la nota de muestra es de marzo; aquí solo importa la espera
     add(settings, db, BOLETA_TXT.name, BOLETA_TXT.read_bytes())
     add(settings, db, f"{NOTA}.txt", note_text().encode())
     tray = Bandeja(settings, db)
@@ -186,3 +186,143 @@ def test_nota_de_comprobante_anterior_al_puente_sale_directo(settings, db):
     boleta = settings.inbox_dir / BOLETA_TXT.name
     boleta.write_bytes(BOLETA_TXT.read_bytes())
     assert Bandeja(settings, db).hold_if_reference_pending(boleta) == "enviar"
+
+
+# --- plazo de las boletas que salen solas (SUNAT 1079) ------------------------------
+def test_boleta_suelta_usa_su_propio_plazo(settings, db):
+    settings.boletas_por_resumen = False
+    settings.plazo_boleta_individual_dias = 3
+    assert len(bj.fechas_disponibles(settings, "boleta", HOY)) == 4      # hoy y 3 días atrás
+    settings.boletas_por_resumen = True
+    assert len(bj.fechas_disponibles(settings, "boleta", HOY)) == settings.plazo_boleta_dias + 1
+
+
+def test_boleta_vencida_que_llega_a_la_carpeta_no_se_envia(settings, db):
+    """Caso BT05-00125925: emitida el 10/11 y enviada el 26/11 con su fecha original -> 1079."""
+    emision = date.fromisoformat(parse_text(BOLETA_TXT.read_text(encoding="utf-8"),
+                                            parse_filename(BOLETA_TXT.name)).fecha_emision)
+    settings.plazo_boleta_individual_dias = 3
+    path = settings.inbox_dir / BOLETA_TXT.name
+    path.write_bytes(BOLETA_TXT.read_bytes())
+    tray = Bandeja(settings, db)
+
+    assert not tray.hold_if_out_of_term(path, hoy=emision)              # del día: sale
+    assert path.exists()
+    hoy = date.fromordinal(emision.toordinal() + 16)
+    assert tray.hold_if_out_of_term(path, hoy=hoy)                      # 16 días después: se retiene
+    assert not path.exists()
+    r = row(settings, db, BOLETA, hoy)
+    assert r["grupo"] == "fuera_plazo" and "Asígnale una fecha nueva" in r["mensaje"]
+    assert any("No se envió" in e["detalle"] for e in db.events(BOLETA))
+
+
+def test_reenviar_un_rechazo_1079_no_lo_manda_con_la_fecha_vieja(settings, db):
+    from sovos_bridge.service.operations import retry_one
+    settings.plazo_boleta_individual_dias = 3
+    txt = settings.error_dir / BOLETA_TXT.name
+    txt.write_bytes(BOLETA_TXT.read_bytes())
+    db.reserve(BOLETA, tipo="03", serie_numero="BT05-00125304", archivo=str(txt))
+    db.set_state(BOLETA, Estado.RECHAZADO, "[1079]", codigo_sunat="1079")
+
+    ok, msg = retry_one(settings, db, db.get(BOLETA))
+    assert ok and "fuera de plazo" in msg
+    assert not (settings.inbox_dir / BOLETA_TXT.name).exists()          # no se reenvió
+    assert txt.exists()                                                 # el original queda donde estaba
+    assert db.staged_one(BOLETA)["estado"] == bj.PREPARADO
+
+
+def test_lo_que_ya_esta_en_sovos_no_se_retiene(settings, db):
+    path = settings.inbox_dir / BOLETA_TXT.name
+    path.write_bytes(BOLETA_TXT.read_bytes())
+    db.reserve(BOLETA, tipo="03", serie_numero="BT05-00125304", archivo=str(path))
+    db.set_state(BOLETA, Estado.APROBADO, "ok")
+    assert not Bandeja(settings, db).hold_if_out_of_term(path, hoy=date(2030, 1, 1))
+    assert path.exists()                                                # el pipeline lo marca duplicado
+
+
+# --- fechas automáticas y traer rechazados por rango --------------------------------
+HOY_AUTO = date(2026, 11, 27)
+
+
+def boleta(settings, db, numero: int, fecha: str, serie: str = "BT05"):
+    """Boleta de muestra con otro número y otra fecha de emisión, dejada en la bandeja."""
+    sn = f"{serie}-{numero:08d}"
+    txt = BOLETA_TXT.read_text(encoding="utf-8").replace("BT05-00125304", sn)
+    orig = parse_text(txt, parse_filename(f"{RUC}-03-{sn}.txt")).fecha_emision
+    data = txt.replace(f"|{orig}|", f"|{fecha}|", 1).encode()
+    add(settings, db, f"{RUC}-03-{sn}.txt", data)
+    return f"{RUC}-03-{sn}"
+
+
+def test_fechas_automaticas_respetan_la_numeracion(settings, db):
+    settings.plazo_boleta_individual_dias = 3            # aceptadas hoy: 24/11 a 27/11
+    viejas = [boleta(settings, db, n, f) for n, f in ((100, "2026-11-10"), (101, "2026-11-12"), (102, "2026-11-13"))]
+    # un número mayor ya salió con fecha 25/11: las viejas no pueden quedar después de esa fecha
+    db.reserve(f"{RUC}-03-BT05-00000150", tipo="03", serie_numero="BT05-00000150", archivo="x", fecha_emision="2026-11-25")
+    db.set_state(f"{RUC}-03-BT05-00000150", Estado.APROBADO, "ok")
+
+    plan = Bandeja(settings, db).plan_fechas(viejas, HOY_AUTO)
+    assert [p["fecha_nueva"] for p in plan] == ["2026-11-25"] * 3
+    assert not any(p["aviso"] for p in plan)
+
+    r = Bandeja(settings, db).assign_auto(viejas, "Ana", HOY_AUTO)
+    assert sorted(r.hechos) == sorted(viejas)
+    assert {row(settings, db, c, HOY_AUTO)["fecha_nueva"] for c in viejas} == {"2026-11-25"}
+    assert all(row(settings, db, c, HOY_AUTO)["grupo"] == "listo" for c in viejas)
+
+
+def test_sin_numeros_mayores_toma_hoy_y_avisa_si_no_se_puede_ordenar(settings, db):
+    settings.plazo_boleta_individual_dias = 3
+    c = boleta(settings, db, 200, "2026-11-10", serie="BT01")
+    assert Bandeja(settings, db).plan_fechas([c], HOY_AUTO)[0]["fecha_nueva"] == "2026-11-27"
+
+    # un número mayor salió el 12/11 (fuera de lo que SUNAT acepta hoy): se usa hoy y se avisa
+    db.reserve(f"{RUC}-03-BT01-00000300", tipo="03", serie_numero="BT01-00000300", archivo="x", fecha_emision="2026-11-12")
+    db.set_state(f"{RUC}-03-BT01-00000300", Estado.APROBADO, "ok")
+    p = Bandeja(settings, db).plan_fechas([c], HOY_AUTO)[0]
+    assert p["fecha_nueva"] == "2026-11-27" and "orden de numeración" in p["aviso"]
+
+
+def test_lo_que_esta_en_plazo_no_se_mueve(settings, db):
+    settings.plazo_boleta_individual_dias = 3
+    c = boleta(settings, db, 400, "2026-11-26")
+    p = Bandeja(settings, db).plan_fechas([c], HOY_AUTO)[0]
+    assert "dentro del plazo" in p["omitido"]
+
+
+def test_traer_rechazados_por_rango_y_tipo(settings, db):
+    def rechazado(clave, tipo, fecha):
+        sn = clave.split("-", 2)[2]
+        txt = settings.error_dir / f"{clave}.txt"
+        txt.write_bytes(BOLETA_TXT.read_bytes().replace(b"BT05-00125304", sn.encode()))
+        db.reserve(clave, tipo=tipo, serie_numero=sn, archivo=str(txt), fecha_emision=fecha)
+        db.set_state(clave, Estado.RECHAZADO, "x", codigo_sunat="1079")
+
+    rechazado(f"{RUC}-03-BT05-00000010", "03", "2026-11-10")
+    rechazado(f"{RUC}-03-BT05-00000013", "03", "2026-11-13")
+    rechazado(f"{RUC}-03-BT05-00000020", "03", "2026-11-20")
+    tray = Bandeja(settings, db)
+    assert len(tray.recuperables()) == 3
+
+    r = tray.bring_back_rejected_by_date("Ana", desde="2026-11-10", hasta="2026-11-13", tipos=["03"])
+    assert sorted(r.hechos) == [f"{RUC}-03-BT05-00000010", f"{RUC}-03-BT05-00000013"]
+    assert [x["clave"] for x in tray.recuperables()] == [f"{RUC}-03-BT05-00000020"]
+    assert not tray.bring_back_rejected_by_date("Ana", tipos=["01"]).hechos    # no hay facturas
+
+
+def test_panel_fecha_automatica_y_traer_con_filtros(settings, db, monkeypatch):
+    settings.plazo_boleta_individual_dias = 3
+    monkeypatch.setattr(bj, "date", type("D", (date,), {"today": staticmethod(lambda: HOY_AUTO)}))
+    c = boleta(settings, db, 500, "2026-11-10")
+    app = PanelApp(settings, db, None)
+    plan = app.bandeja_action("fecha-auto", {"claves": [c], "simular": True, "responsable": "Ana"}, "")["plan"]
+    assert plan[0]["fecha_nueva"] == "2026-11-27"
+    assert db.staged_one(c)["fecha_nueva"] is None                      # simular no cambia nada
+    assert app.bandeja_action("fecha-auto", {"claves": [c], "responsable": "Ana"}, "")["hechos"] == [c]
+    assert db.staged_one(c)["fecha_nueva"] == "2026-11-27"
+
+    with pytest.raises(PanelError, match="posterior"):
+        app.bandeja_action("traer-rechazados", {"desde": "2026-11-13", "hasta": "2026-11-10", "responsable": "Ana"}, "")
+    with pytest.raises(PanelError, match="Tipos"):
+        app.bandeja_action("traer-rechazados", {"tipos": ["99"], "responsable": "Ana"}, "")
+    assert "recuperables" in app.bandeja()

@@ -373,7 +373,9 @@ function replyCallout(d) {
   }
   const tone = ESTADOS[d.estado]?.tone === "bad" ? "bad" : "warn";
   const ayuda = {
-    RECHAZADO: "SUNAT no lo registró: el mismo número puede reenviarse una vez corregida la causa.",
+    RECHAZADO: ["1079", "2108"].includes(d.codigo_sunat)
+      ? "SUNAT lo rechazó por su fecha de emisión. Reenviarlo con la misma fecha no sirve: al reenviarlo pasa a la bandeja de preparación para asignarle una fecha nueva."
+      : "SUNAT no lo registró: el mismo número puede reenviarse una vez corregida la causa.",
     ERROR_CONEXION: d.document_id ? "Sovos sí lo recibió. Reanudar la consulta no lo reenvía." : "No llegó a Sovos o no hubo confirmación.",
     VALIDACION_ERROR: "El TXT tiene datos inválidos. Corregirlo en el sistema de facturación antes de reenviar.",
     DUPLICADO: "Sovos ya lo tenía registrado; no se volvió a enviar.",
@@ -530,7 +532,10 @@ async function retryDoc(clave, btn) {
   busy(btn, true);
   try {
     const r = await api(`/api/documents/${encodeURIComponent(clave)}/retry`, { method: "POST", body: { forzar: d.reintento === "forzado" } });
-    toast(r.ok ? (d.reintento === "consulta" ? "Consulta reanudada" : "Devuelto a la bandeja para reenvío") : r.mensaje, r.ok ? "ok" : "warn");
+    const enPrep = r.ok && /fuera de plazo/.test(r.mensaje || "");
+    toast(r.ok ? (d.reintento === "consulta" ? "Consulta reanudada"
+      : enPrep ? "Fuera de plazo: quedó en la bandeja de preparación para asignarle una fecha nueva"
+      : "Devuelto a la bandeja para reenvío") : r.mensaje, r.ok ? (enPrep ? "warn" : "ok") : "warn");
     await Promise.all([loadSummary(), loadRows({ silent: true })]);
     if (state.openClave === clave) showDetail(clave);
   } catch (err) {
@@ -1079,7 +1084,8 @@ async function loadTray({ silent = false } = {}) {
   try {
     const d = await api("/api/bandeja");
     Object.assign(tray, { rows: d.filas, fechas: d.fechas, plazos: d.plazos, hoy: d.hoy,
-                          rechazados: d.rechazados_por_fecha, porResumen: !!d.boletas_por_resumen, loaded: true });
+                          rechazados: d.rechazados_por_fecha, recuperables: d.recuperables || [],
+                          porResumen: !!d.boletas_por_resumen, loaded: true });
     const present = new Set(tray.rows.map((r) => r.clave));
     tray.selected = new Set([...tray.selected].filter((c) => present.has(c)));
     renderTray();
@@ -1151,8 +1157,8 @@ function renderTrayAlerts() {
                     fuera.length - fac && fmtCount(fuera.length - fac, "boleta o nota de boleta", "boletas o notas de boleta")].filter(Boolean);
     const f = fuera.map((r) => r.fecha_efectiva).sort();
     cards.push({ tone: "bad", n: fuera.length, title: "Fuera de plazo",
-      text: `${partes.join(" y ")}, emitidas del ${fmtDate(f[0])} al ${fmtDate(f[f.length - 1])}. Con su fecha original SUNAT las rechazaría. ¿Les colocamos una fecha nueva?`,
-      actions: [["Asignar fecha nueva", "date-fuera", true], ["Ver cuáles", "chip:fuera_plazo"]] });
+      text: `${partes.join(" y ")}, emitidas del ${fmtDate(f[0])} al ${fmtDate(f[f.length - 1])}. Con su fecha original SUNAT las rechazaría. El puente les propone una fecha nueva a cada uno, sin desordenar la numeración.`,
+      actions: [["Asignar fechas automáticamente", "date-auto", true], ["Elegir una fecha a mano", "date-fuera"], ["Ver cuáles", "chip:fuera_plazo"]] });
   }
   if (hoy.length) {
     cards.push({ tone: "warn", n: hoy.length, title: "Vencen hoy",
@@ -1179,8 +1185,8 @@ function renderTrayAlerts() {
   }
   if (tray.rechazados) {
     cards.push({ tone: "bad", n: tray.rechazados, title: "Rechazados para corregir",
-      text: "SUNAT los rechazó por plazo (2108) o porque piden resumen diario (1079). Tráelos a la bandeja para reenviarlos.",
-      actions: [["Traer a la bandeja", "bring-back", true]] });
+      text: "SUNAT los rechazó por su fecha (2108 en facturas, 1079 en boletas). Elige el rango de fechas y los tipos que quieres corregir: vuelven a la bandeja con una fecha nueva propuesta.",
+      actions: [["Elegir cuáles traer", "bring-back", true]] });
   }
   if (!cards.length && R.length) {
     cards.push({ tone: "ok", n: R.length, title: "Todo en orden",
@@ -1447,20 +1453,14 @@ async function trayAction(act, btn) {
   if (act.startsWith("chip:")) { clearTrayFilters(false); tray.chip = act.slice(5); return renderTray(); }
   if (act === "sinref") { clearTrayFilters(false); tray.chip = "listo"; tray.tipo = "nota"; return renderTray(); }
   if (act === "date-fuera") return openDateModal(R.filter((r) => r.grupo === "fuera_plazo"));
+  if (act === "date-auto") return autoDates(R.filter((r) => r.grupo === "fuera_plazo"), btn);
   if (act === "send-hoy") return releaseRows(R.filter((r) => r.grupo === "listo" && r.dias_restantes === 0), { title: "¿Enviar los que vencen hoy?", btn });
   if (act.startsWith("send-")) {
     const def = STEP_DEFS.find((s) => `send-${s.key}` === act);
     const rows = R.filter((r) => def.match(r) && r.grupo === "listo");
     return releaseRows(rows, { title: `¿Enviar ${fmtCount(rows.length, def.one, def.many)} a Sovos?`, btn });
   }
-  if (act === "bring-back") {
-    busy(btn, true);
-    try {
-      const r = await trayPost("traer-rechazados", {});
-      await afterTrayAction(r, (h) => `${fmtCount(h.length, "rechazado volvió", "rechazados volvieron")} a la bandeja: asígnales una fecha nueva`);
-    } catch (err) { toast(err.message, "bad"); }
-    finally { busy(btn, false); }
-  }
+  if (act === "bring-back") return bringBackModal();
 }
 
 async function bulkAction(act, btn) {
@@ -1469,6 +1469,7 @@ async function bulkAction(act, btn) {
   if (!rows.length) return;
   if (act === "liberar") return releaseRows(rows, { btn });
   if (act === "fecha") return openDateModal(rows);
+  if (act === "fecha-auto") return autoDates(rows, btn);
   if (act === "descartar") {
     if (!trayWho()) return;
     const ok = await confirmModal({
@@ -1820,3 +1821,130 @@ loadSummary();
   if (view === "tray") showView("tray"); else loadRows();
 })();
 refreshLoop();
+
+
+// --- fechas automáticas ------------------------------------------------------
+// El puente propone la fecha de cada comprobante fuera de plazo: la más reciente que SUNAT
+// acepta sin desordenar la numeración de su serie. El usuario solo revisa y confirma.
+async function autoDates(rows, btn) {
+  rows = rows.filter((r) => r.grupo !== "esperando");
+  if (!rows.length) { toast("No hay comprobantes fuera de plazo para cambiarles la fecha", "warn"); return; }
+  if (!trayWho()) return;
+  const claves = rows.map((r) => r.clave);
+  let plan;
+  busy(btn, true);
+  try {
+    const r = await trayPost("fecha-auto", { claves, simular: true });
+    if (!r) return;
+    plan = r.plan;
+  } catch (err) { toast(err.message, "bad"); return; }
+  finally { busy(btn, false); }
+
+  const ok = plan.filter((p) => !p.omitido);
+  const omit = plan.filter((p) => p.omitido);
+  if (!ok.length) { toast(omit[0]?.omitido || "No hay nada que cambiar", "warn"); return; }
+
+  // Una fila por serie y fecha nueva: "BT05 · 00126088 a 00126111 · emitidas 10/11–13/11 → 27/11"
+  const grupos = new Map();
+  ok.forEach((p) => {
+    const [serie, num] = p.serie_numero.split("-");
+    const k = `${serie}|${p.fecha_nueva}`;
+    const g = grupos.get(k) || { serie, fecha: p.fecha_nueva, n: 0, nums: [], orig: [], aviso: false, mes: false };
+    g.n += 1; g.nums.push(num); g.orig.push(p.fecha_original);
+    g.aviso ||= !!p.aviso; g.mes ||= p.cambia_mes;
+    grupos.set(k, g);
+  });
+  const filas = [...grupos.values()].sort((a, b) => a.serie.localeCompare(b.serie) || a.fecha.localeCompare(b.fecha)).map((g) => {
+    g.nums.sort(); g.orig.sort();
+    const nums = g.n === 1 ? g.nums[0] : `${g.nums[0]} a ${g.nums[g.nums.length - 1]}`;
+    const orig = g.orig[0] === g.orig[g.orig.length - 1] ? fmtDate(g.orig[0]) : `${fmtDate(g.orig[0])} – ${fmtDate(g.orig[g.orig.length - 1])}`;
+    return `<tr${g.aviso ? ' data-tone="warn"' : ""}>
+      <td><strong>${esc(g.serie)}</strong></td><td class="tnum">${esc(nums)}<span class="plan-n">${fmtCount(g.n, "comprobante", "comprobantes")}</span></td>
+      <td class="tnum">${orig}</td><td class="tnum plan-new">${fmtDate(g.fecha)}</td></tr>`;
+  }).join("");
+  const mes = ok.filter((p) => p.cambia_mes).length;
+  const avisos = ok.filter((p) => p.aviso).length;
+  const notas = [
+    mes ? `<p class="date-warn">${fmtCount(mes, "comprobante cambia", "comprobantes cambian")} de mes, y con eso de periodo tributario. Confírmalo con contabilidad.</p>` : "",
+    avisos ? `<p class="date-warn">${fmtCount(avisos, "comprobante no puede", "comprobantes no pueden")} conservar el orden de numeración: un número mayor de su serie ya salió con una fecha que SUNAT ya no acepta. Se les pone la fecha de hoy.</p>` : "",
+    omit.length ? `<p class="hint">${fmtCount(omit.length, "seleccionado no cambia", "seleccionados no cambian")}: ${esc(omitidosResumen(omit.map((o) => ({ clave: o.clave, motivo: o.omitido }))))}.</p>` : "",
+  ].join("");
+  const answer = await confirmModal({
+    title: `Fecha nueva para ${fmtCount(ok.length, "comprobante", "comprobantes")}`,
+    html: `<p>Cada comprobante recibe la fecha más reciente que SUNAT acepta hoy, sin que un número menor quede con una fecha posterior a la de un número mayor de su serie.</p>
+      <div class="plan-wrap"><table class="plan-table"><thead><tr><th>Serie</th><th>Números</th><th>Emitidos</th><th>Fecha nueva</th></tr></thead>
+      <tbody>${filas}</tbody></table></div>${notas}
+      <p class="hint">El TXT original no se modifica y la fecha original queda en el historial.</p>`,
+    ok: "Asignar fechas",
+    check: { text: "Enviarlos a Sovos en cuanto tengan su fecha" },
+  });
+  if (!answer) return;
+  try {
+    const r = await trayPost("fecha-auto", { claves: ok.map((p) => p.clave) });
+    if (!r) return;
+    await afterTrayAction(r, (h) => `Fecha nueva asignada a ${fmtCount(h.length, "comprobante", "comprobantes")}`);
+    if (answer.checked) {
+      const hechos = new Set(r.hechos);
+      const listos = tray.rows.filter((x) => hechos.has(x.clave) && x.grupo === "listo");
+      if (listos.length) await releaseRows(listos, { title: `¿Enviar ahora ${fmtCount(listos.length, "el comprobante", "los comprobantes")} con fecha nueva?` });
+    }
+  } catch (err) { toast(err.message, "bad"); }
+}
+
+// --- traer rechazados por rango de fechas y tipo ---------------------------------
+const TIPOS_TRAER = [["03", "Boletas"], ["01", "Facturas"], ["07", "Notas de crédito"], ["08", "Notas de débito"]];
+
+async function bringBackModal() {
+  const all = tray.recuperables || [];
+  if (!all.length) { toast("No hay rechazados por fecha para corregir", "ok"); return; }
+  if (!trayWho()) return;
+  const fechas = all.map((x) => x.fecha).filter(Boolean).sort();
+  const min = fechas[0] || "", max = fechas[fechas.length - 1] || "";
+  const tipos = TIPOS_TRAER.filter(([k]) => all.some((x) => x.tipo === k));
+  const pending = confirmModal({
+    title: "Traer rechazados a la bandeja",
+    html: `<p>Elige los comprobantes que quieres corregir. Vuelven a la bandeja y el puente les propone una fecha nueva.</p>
+      <div class="bb-range">
+        <label class="field"><span class="field-label">Emitidos desde</span><input type="date" id="bb-desde" value="${min}" min="${min}" max="${max}"></label>
+        <label class="field"><span class="field-label">hasta</span><input type="date" id="bb-hasta" value="${max}" min="${min}" max="${max}"></label>
+      </div>
+      <fieldset class="bb-tipos"><legend class="field-label">Tipo de comprobante (uno o varios)</legend>
+        ${tipos.map(([k, label]) => `<label class="bb-tipo"><input type="checkbox" value="${k}" checked><span>${label}</span><span class="bb-n" data-tipo="${k}"></span></label>`).join("")}
+      </fieldset>
+      <p class="bb-total" id="bb-total" aria-live="polite"></p>`,
+    ok: "Traer",
+  });
+  const leer = () => ({
+    desde: $("bb-desde").value, hasta: $("bb-hasta").value,
+    tipos: [...document.querySelectorAll(".bb-tipo input:checked")].map((i) => i.value),
+  });
+  const elegidos = () => {
+    const f = leer();
+    return all.filter((x) => (!f.desde || x.fecha >= f.desde) && (!f.hasta || x.fecha <= f.hasta) && f.tipos.includes(x.tipo));
+  };
+  const update = () => {
+    const f = leer();
+    const enRango = all.filter((x) => (!f.desde || x.fecha >= f.desde) && (!f.hasta || x.fecha <= f.hasta));
+    document.querySelectorAll(".bb-n").forEach((s) => { s.textContent = enRango.filter((x) => x.tipo === s.dataset.tipo).length.toLocaleString("es-PE"); });
+    const sel = elegidos();
+    const malRango = f.desde && f.hasta && f.desde > f.hasta;
+    $("bb-total").textContent = malRango ? "La fecha inicial es posterior a la final."
+      : sel.length ? `${sel.length === 1 ? "Se traerá" : "Se traerán"} ${fmtCount(sel.length, "comprobante", "comprobantes")}.` : "Ningún comprobante cumple estos filtros.";
+    $("bb-total").dataset.tone = malRango || !sel.length ? "warn" : "";
+    $("modal-ok").disabled = malRango || !sel.length;
+    $("modal-ok").textContent = sel.length && !malRango ? `Traer ${fmtCount(sel.length, "comprobante", "comprobantes")}` : "Traer";
+  };
+  document.querySelectorAll("#bb-desde, #bb-hasta, .bb-tipo input").forEach((i) => i.addEventListener("input", update));
+  update();
+  const answer = await pending;
+  if (!answer) return;
+  const f = leer();
+  try {
+    const r = await trayPost("traer-rechazados", f);
+    if (!r) return;
+    await afterTrayAction(r, (h) => `${fmtCount(h.length, "rechazado volvió", "rechazados volvieron")} a la bandeja`);
+    const hechos = new Set(r.hechos);
+    const fuera = tray.rows.filter((x) => hechos.has(x.clave) && x.grupo === "fuera_plazo");
+    if (fuera.length) await autoDates(fuera);
+  } catch (err) { toast(err.message, "bad"); }
+}
